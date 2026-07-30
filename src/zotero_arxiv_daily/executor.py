@@ -3,7 +3,7 @@ from pyzotero import zotero
 from omegaconf import DictConfig, ListConfig
 from .utils import glob_match
 from .retriever import get_retriever_cls
-from .protocol import CorpusPaper
+from .protocol import CorpusPaper, Paper
 import random
 from datetime import datetime
 from .reranker import get_reranker_cls
@@ -11,6 +11,7 @@ from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
 
 
 def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key: str) -> list[str] | None:
@@ -111,10 +112,7 @@ class Executor:
             logger.info("Reranking papers...")
             reranked_papers = self.reranker.rerank(all_papers, corpus)
             reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
-            logger.info("Generating TLDR and affiliations...")
-            for p in tqdm(reranked_papers):
-                p.generate_tldr(self.openai_client, self.config.llm)
-                p.generate_affiliations(self.openai_client, self.config.llm)
+            self._enrich_papers(reranked_papers)
         elif not self.config.executor.send_empty:
             logger.info("No new papers found. No email will be sent.")
             return
@@ -122,3 +120,40 @@ class Executor:
         email_content = render_email(reranked_papers)
         send_email(self.config, email_content)
         logger.info("Email sent successfully")
+
+    def _enrich_papers(self, papers: list[Paper]) -> None:
+        """Fetch full text lazily and generate TL;DR + affiliations in parallel.
+
+        Why this is the central speed fix:
+        - Full text is only needed for TL;DR/affiliation generation of the papers
+          that actually appear in the email, and is irrelevant to ranking. So we
+          fetch it only here, for the already-reranked top-N, instead of for the
+          hundreds of papers retrieved each day.
+        - TL;DR + affiliation generation is I/O-bound (LLM API calls). Running it
+          serially over ~100 papers dominated wall-clock time; a thread pool turns
+          it into a few minutes.
+        """
+        if len(papers) == 0:
+            return
+        workers_cfg = getattr(self.config.executor, "enrich_workers", None) or 8
+        workers = max(1, min(int(workers_cfg), len(papers)))
+        logger.info(
+            f"Fetching full text + generating TL;DR/affiliations for "
+            f"{len(papers)} papers ({workers} workers)..."
+        )
+
+        def _enrich_one(p: Paper) -> None:
+            # Lazy full-text: only download if not already present (e.g. a source
+            # that ships full text, or a stub in tests).
+            if p.full_text is None:
+                retriever = self.retrievers.get(p.source)
+                if retriever is not None:
+                    try:
+                        p.full_text = retriever.fetch_full_text(p)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch full text for {p.url}: {e}")
+            p.generate_tldr(self.openai_client, self.config.llm)
+            p.generate_affiliations(self.openai_client, self.config.llm)
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(tqdm(ex.map(_enrich_one, papers), total=len(papers), desc="Enriching papers"))

@@ -161,11 +161,13 @@ class ArxivRetriever(BaseRetriever):
         authors = [a.name for a in raw_paper.authors]
         abstract = raw_paper.summary
         pdf_url = raw_paper.pdf_url
-        full_text = extract_text_from_tar(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_html(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_pdf(raw_paper)
+        # Full text is intentionally NOT fetched here. It is only used to
+        # generate the TL;DR and author affiliations for the papers that
+        # actually make it into the final email, and is irrelevant to ranking
+        # (ranking uses abstracts only). Fetching it for every retrieved paper
+        # (hundreds per day) was the dominant cause of slow / failing runs.
+        # It is lazily fetched via ArxivRetriever.fetch_full_text() for the
+        # final top-N papers after reranking.
         return Paper(
             source=self.name,
             title=title,
@@ -173,41 +175,59 @@ class ArxivRetriever(BaseRetriever):
             abstract=abstract,
             url=raw_paper.entry_id,
             pdf_url=pdf_url,
-            full_text=full_text,
+            full_text=None,
         )
 
+    def fetch_full_text(self, paper: Paper) -> str | None:
+        """Lazily download and extract the full text of a paper.
 
-def extract_text_from_html(paper: ArxivResult) -> str | None:
-    html_url = paper.entry_id.replace("/abs/", "/html/")
+        Tries LaTeX source (tar.gz) -> arXiv HTML rendering -> PDF, matching the
+        previous behaviour but only invoked for papers that will be shown.
+        """
+        return fetch_arxiv_full_text(paper.url, paper.pdf_url, paper.title)
+
+
+def fetch_arxiv_full_text(
+    entry_id: str, pdf_url: str | None, title: str
+) -> str | None:
+    """Download and extract the full text of an arXiv paper.
+
+    Order: LaTeX source (tar.gz) -> arXiv HTML -> PDF. Network-heavy; call only
+    for papers that will actually be displayed (i.e. after reranking).
+    """
+    # 1. LaTeX source tarball. arxiv.Result.source_url() is pdf_url with
+    #    "/pdf/" replaced by "/src/".
+    if pdf_url is not None:
+        source_url = pdf_url.replace("/pdf/", "/src/")
+        text = _run_with_hard_timeout(
+            _extract_text_from_tar_worker,
+            (source_url, entry_id, title),
+            timeout=TAR_EXTRACT_TIMEOUT,
+            operation="Tar extraction",
+            paper_title=title,
+        )
+        if text:
+            return text
+
+    # 2. arXiv HTML rendering
+    html_url = entry_id.replace("/abs/", "/html/")
     try:
-        return _extract_text_from_html_worker(html_url)
+        text = _extract_text_from_html_worker(html_url)
+        if text:
+            return text
     except Exception as exc:
-        logger.warning(f"HTML extraction failed for {paper.title}: {exc}")
-        return None
+        logger.warning(f"HTML extraction failed for {title}: {exc}")
 
+    # 3. PDF fallback
+    if pdf_url is not None:
+        text = _run_with_hard_timeout(
+            _extract_text_from_pdf_worker,
+            (pdf_url,),
+            timeout=PDF_EXTRACT_TIMEOUT,
+            operation="PDF extraction",
+            paper_title=title,
+        )
+        if text:
+            return text
 
-def extract_text_from_pdf(paper: ArxivResult) -> str | None:
-    if paper.pdf_url is None:
-        logger.warning(f"No PDF URL available for {paper.title}")
-        return None
-    return _run_with_hard_timeout(
-        _extract_text_from_pdf_worker,
-        (paper.pdf_url,),
-        timeout=PDF_EXTRACT_TIMEOUT,
-        operation="PDF extraction",
-        paper_title=paper.title,
-    )
-
-
-def extract_text_from_tar(paper: ArxivResult) -> str | None:
-    source_url = paper.source_url()
-    if source_url is None:
-        logger.warning(f"No source URL available for {paper.title}")
-        return None
-    return _run_with_hard_timeout(
-        _extract_text_from_tar_worker,
-        (source_url, paper.entry_id, paper.title),
-        timeout=TAR_EXTRACT_TIMEOUT,
-        operation="Tar extraction",
-        paper_title=paper.title,
-    )
+    return None
