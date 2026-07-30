@@ -14,6 +14,12 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 
 
+def _paper_matches_keywords(paper: Paper, keywords: list[str]) -> bool:
+    """True if any keyword appears (case-insensitive) in the title or abstract."""
+    haystack = f"{paper.title}\n{paper.abstract}".lower()
+    return any(kw in haystack for kw in keywords)
+
+
 def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key: str) -> list[str] | None:
     if patterns is None:
         return None
@@ -108,18 +114,83 @@ class Executor:
             all_papers.extend(papers)
         logger.info(f"Total {len(all_papers)} papers retrieved from all sources")
         reranked_papers = []
+        pinned_papers: list[Paper] = []
         if len(all_papers) > 0:
             logger.info("Reranking papers...")
             reranked_papers = self.reranker.rerank(all_papers, corpus)
+            # Keyword pinning sits ON TOP of the recommendation algorithm:
+            # papers matching a configured keyword are force-pinned to the top of
+            # the email and do NOT count against max_paper_num, so they never
+            # displace the algorithm's picks. It scans the full retrieved set so
+            # that low-scored-but-keyword-matched papers are still surfaced.
+            pinned_papers, reranked_papers = self._select_pinned(reranked_papers)
             reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
-            self._enrich_papers(reranked_papers)
+            self._enrich_papers(pinned_papers + reranked_papers)
         elif not self.config.executor.send_empty:
             logger.info("No new papers found. No email will be sent.")
             return
         logger.info("Sending email...")
-        email_content = render_email(reranked_papers)
+        email_content = render_email(pinned_papers + reranked_papers)
         send_email(self.config, email_content)
         logger.info("Email sent successfully")
+
+    # ------------------------------------------------------------------
+    # Keyword pinning
+    # ------------------------------------------------------------------
+
+    def _pin_keywords(self) -> list[str]:
+        """Normalized, lowercased, non-empty pin keywords from config (or [])."""
+        raw = getattr(self.config.executor, "pin_keywords", None)
+        if not raw:
+            return []
+        keywords = [str(k).lower().strip() for k in raw]
+        return [k for k in keywords if k]
+
+    def _max_pinned_num(self) -> int:
+        val = getattr(self.config.executor, "max_pinned_num", 20)
+        try:
+            return max(0, int(val))
+        except Exception:
+            return 20
+
+    def _select_pinned(self, papers: list[Paper]) -> tuple[list[Paper], list[Paper]]:
+        """Split out keyword-pinned papers.
+
+        Returns ``(pinned, remaining)``. ``papers`` is assumed score-sorted
+        (as produced by the reranker); both outputs preserve that order. Pinned
+        papers are additive: they do not consume ``max_paper_num`` slots. A
+        ``max_pinned_num`` cap bounds the pinned section; matches beyond the cap
+        flow back into ``remaining`` so they can still surface via the algorithm.
+        """
+        keywords = self._pin_keywords()
+        if not keywords or len(papers) == 0:
+            return [], papers
+
+        pinned: list[Paper] = []
+        remaining: list[Paper] = []
+        for p in papers:
+            if _paper_matches_keywords(p, keywords):
+                p.pinned = True
+                pinned.append(p)
+            else:
+                remaining.append(p)
+
+        cap = self._max_pinned_num()
+        if len(pinned) > cap:
+            overflow = pinned[cap:]
+            pinned = pinned[:cap]
+            # papers is score-sorted, so overflow entries are the lower-scored
+            # matches; prepending keeps remaining score-sorted for the top-N slice.
+            remaining = overflow + remaining
+            logger.warning(
+                f"{cap + len(overflow)} papers matched pin keywords; capping the "
+                f"pinned section to {cap} (max_pinned_num). The remaining "
+                f"{len(overflow)} will compete via the normal recommendation. "
+                f"Raise max_pinned_num to keep more."
+            )
+        if pinned:
+            logger.info(f"Pinned {len(pinned)} paper(s) by keyword match")
+        return pinned, remaining
 
     def _enrich_papers(self, papers: list[Paper]) -> None:
         """Fetch full text lazily and generate TL;DR + affiliations in parallel.

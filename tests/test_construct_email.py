@@ -76,3 +76,37 @@ def test_get_block_html_contains_all_fields():
 def test_get_empty_html():
     html = get_empty_html()
     assert "No Papers Today" in html
+
+
+def test_render_email_pinned_section_appears_above_recommendations():
+    pinned = make_sample_paper(title="Pinned Paper", score=5.0, tldr="pin tldr")
+    pinned.pinned = True
+    other = make_sample_paper(title="Other Paper", score=8.0, tldr="rec tldr")
+    html = render_email([pinned, other])
+    # section headers present and in the right order
+    assert "Pinned by keywords" in html
+    assert "Recommended for you" in html
+    assert html.index("Pinned by keywords") < html.index("Recommended for you")
+    # pinned block carries the pin badge, non-pinned does not
+    pinned_block_start = html.index("Pinned Paper")
+    rec_block_start = html.index("Other Paper")
+    # the badge markup appears before the pinned title and not before the rec title
+    assert "Pinned" in html[pinned_block_start - 200 : pinned_block_start]
+    assert html[rec_block_start - 200 : rec_block_start].count("Pinned") == 0
+
+
+def test_render_email_only_pinned_no_recommendations_header():
+    pinned = make_sample_paper(title="Solo Pinned", score=3.0, tldr="t")
+    pinned.pinned = True
+    html = render_email([pinned])
+    assert "Pinned by keywords" in html
+    # no "Recommended for you" section when there are no other papers
+    assert "Recommended for you" not in html
+    assert "Solo Pinned" in html
+
+
+def test_get_block_html_pinned_flag_adds_badge():
+    plain = get_block_html("T", "A", "1.0", "s", "http://x", "MIT", pinned=False)
+    pinned = get_block_html("T", "A", "1.0", "s", "http://x", "MIT", pinned=True)
+    assert "Pinned" not in plain
+    assert "Pinned" in pinned
