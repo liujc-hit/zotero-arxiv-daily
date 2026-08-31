@@ -416,6 +416,39 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Security: empty-corpus error log must not leak the Zotero api_key
+# ---------------------------------------------------------------------------
+
+
+def test_empty_corpus_error_omits_api_key(config, monkeypatch):
+    recorded: list[str] = []
+
+    from zotero_arxiv_daily import executor as executor_module
+
+    monkeypatch.setattr(
+        executor_module.logger, "error", lambda msg, *a, **k: recorded.append(str(msg))
+    )
+
+    from tests.canned_responses import make_stub_zotero_client
+
+    stub_zot = make_stub_zotero_client(items=[])
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot
+    )
+
+    executor = Executor.__new__(Executor)
+    executor.config = config
+    executor.include_path_patterns = None
+    executor.ignore_path_patterns = None
+    executor.run()
+
+    assert recorded, "expected an error log for the empty corpus"
+    joined = " ".join(recorded)
+    assert "fake-zotero-key" not in joined, "api_key leaked into the error log"
+    assert "api_key" in joined, "message should say the key was omitted"
+
+
+# ---------------------------------------------------------------------------
 # E2E: min_score floor interaction with run()
 # ---------------------------------------------------------------------------
 

@@ -101,7 +101,15 @@ class Executor:
         corpus = self.fetch_zotero_corpus()
         corpus = self.filter_corpus(corpus)
         if len(corpus) == 0:
-            logger.error(f"No zotero papers found. Please check your zotero settings:\n{self.config.zotero}")
+            # Never log self.config.zotero wholesale: it contains api_key, and
+            # workflow logs of public repositories are publicly readable.
+            zcfg = self.config.zotero
+            logger.error(
+                "No zotero papers found. Please check your zotero settings: "
+                f"user_id={zcfg.get('user_id')}, "
+                f"include_path={zcfg.get('include_path')}, "
+                f"ignore_path={zcfg.get('ignore_path')} (api_key omitted for safety)."
+            )
             return
         all_papers = []
         for source, retriever in self.retrievers.items():
