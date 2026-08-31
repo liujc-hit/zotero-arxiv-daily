@@ -38,7 +38,10 @@ jobs:
             user_id: ${oc.env:ZOTERO_ID}
             api_key: ${oc.env:ZOTERO_KEY}
             # Collection paths start at the TOP-LEVEL collection name (no "我的文库/" prefix).
-            include_path: ["当代外骨骼专版/偏好学习/**","当代外骨骼专版/外骨骼与生物力学/**","当代外骨骼专版/生物工程与能量优化/**","当代外骨骼专版/Preference-based learning/**","当代外骨骼专版/Human in the loop/**","当代外骨骼专版/动态偏好建模/**","当代外骨骼专版/偏好测量方法/**","当代外骨骼专版/偏好与耗氧量/**"]
+            # NOTE: pattern "X/**" does NOT match papers filed directly IN collection X
+            # (only in subcollections of X), so each target needs BOTH the exact path
+            # and the recursive form. Verified against the actual Zotero collection tree.
+            include_path: ["当代外骨骼专版/偏好学习","当代外骨骼专版/偏好学习/**","当代外骨骼专版/外骨骼与生物力学","当代外骨骼专版/外骨骼与生物力学/**","当代外骨骼专版/生物工程与能量优化","当代外骨骼专版/生物工程与能量优化/**","当代外骨骼专版/Preference-based learning","当代外骨骼专版/Preference-based learning/**","当代外骨骼专版/Human in the loop","当代外骨骼专版/Human in the loop/**","当代外骨骼专版/动态偏好建模","当代外骨骼专版/动态偏好建模/**","当代外骨骼专版/偏好测量方法","当代外骨骼专版/偏好测量方法/**","当代外骨骼专版/偏好与耗氧量","当代外骨骼专版/偏好与耗氧量/**"]
 
           email:
             sender: ${oc.env:SENDER}
@@ -81,4 +84,9 @@ jobs:
           EOF
           echo "Use custom config:"
           cat config/custom.yaml
-          uv run src/zotero_arxiv_daily/main.py
+          set -o pipefail
+          rc=0
+          uv run src/zotero_arxiv_daily/main.py 2>&1 | tee /tmp/run.log || rc=$?
+          echo "## Pipeline summary" >> "$GITHUB_STEP_SUMMARY"
+          grep -E "Fetched [0-9]+ zotero papers|Selected [0-9]+ zotero papers|papers retrieved from all sources|Retrieved [0-9]+ (arxiv|biorxiv|medrxiv) papers|min_score filter|Pinned [0-9]+ paper|Email sent successfully|No zotero papers|No papers survived|No new papers" /tmp/run.log >> "$GITHUB_STEP_SUMMARY" || true
+          exit $rc
