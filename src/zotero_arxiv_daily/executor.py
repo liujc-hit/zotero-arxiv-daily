@@ -124,7 +124,11 @@ class Executor:
             # displace the algorithm's picks. It scans the full retrieved set so
             # that low-scored-but-keyword-matched papers are still surfaced.
             pinned_papers, reranked_papers = self._select_pinned(reranked_papers)
+            reranked_papers = self._apply_min_score(reranked_papers)
             reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
+            if len(pinned_papers) + len(reranked_papers) == 0 and not self.config.executor.send_empty:
+                logger.info("No papers survived reranking + relevance floor. No email will be sent.")
+                return
             self._enrich_papers(pinned_papers + reranked_papers)
         elif not self.config.executor.send_empty:
             logger.info("No new papers found. No email will be sent.")
@@ -133,6 +137,51 @@ class Executor:
         email_content = render_email(pinned_papers + reranked_papers)
         send_email(self.config, email_content)
         logger.info("Email sent successfully")
+
+    # ------------------------------------------------------------------
+    # Relevance floor (executor.min_score)
+    # ------------------------------------------------------------------
+
+    def _min_score(self) -> float | None:
+        """Resolve executor.min_score defensively; None disables the floor."""
+        cfg = getattr(self, "config", None)
+        executor_cfg = getattr(cfg, "executor", None) if cfg is not None else None
+        if executor_cfg is None:
+            return None
+        try:
+            val = (
+                executor_cfg.get("min_score", None)
+                if hasattr(executor_cfg, "get")
+                else getattr(executor_cfg, "min_score", None)
+            )
+        except Exception:
+            return None
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except Exception:
+            return None
+
+    def _apply_min_score(self, papers: list[Paper]) -> list[Paper]:
+        """Drop papers whose reranker score is below executor.min_score.
+
+        The floor is a precision gate: on days when nothing in the candidate
+        pool is genuinely similar to the corpus, the email is left empty (or
+        filled only by pinned papers) instead of padded with weak matches.
+        Pinned papers bypass this filter by construction — the floor is
+        applied only to the algorithm's pool, so explicit user intent wins.
+        """
+        floor = self._min_score()
+        if floor is None or len(papers) == 0:
+            return papers
+        kept = [p for p in papers if (p.score if p.score is not None else 0.0) >= floor]
+        dropped = len(papers) - len(kept)
+        if dropped:
+            logger.info(
+                f"min_score filter: dropped {dropped}/{len(papers)} papers below {floor}"
+            )
+        return kept
 
     # ------------------------------------------------------------------
     # Keyword pinning

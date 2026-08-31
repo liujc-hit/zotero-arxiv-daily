@@ -191,6 +191,47 @@ def test_select_pinned_empty_keywords_strings_are_ignored():
 
 
 # ---------------------------------------------------------------------------
+# min_score relevance floor (_apply_min_score)
+# ---------------------------------------------------------------------------
+
+
+def _make_floor_executor(min_score=None):
+    ex = Executor.__new__(Executor)
+    ex.config = OmegaConf.create({"executor": {"min_score": min_score}})
+    return ex
+
+
+def test_apply_min_score_drops_papers_below_floor():
+    ex = _make_floor_executor(min_score=5.0)
+    papers = [
+        _pin_paper("High", "x", score=8.0, url="high"),
+        _pin_paper("Low", "x", score=3.0, url="low"),
+        _pin_paper("Edge", "x", score=5.0, url="edge"),  # exactly at floor -> kept
+    ]
+    kept = ex._apply_min_score(papers)
+    assert [p.url for p in kept] == ["high", "edge"]
+
+
+def test_apply_min_score_null_keeps_all():
+    ex = _make_floor_executor(min_score=None)
+    papers = [_pin_paper("Low", "x", score=0.5, url="low")]
+    assert ex._apply_min_score(papers) == papers
+
+
+def test_apply_min_score_missing_attr_keeps_all():
+    ex = Executor.__new__(Executor)
+    ex.config = OmegaConf.create({"executor": {}})
+    papers = [_pin_paper("Low", "x", score=0.5, url="low")]
+    assert ex._apply_min_score(papers) == papers
+
+
+def test_apply_min_score_treats_missing_score_as_zero():
+    ex = _make_floor_executor(min_score=5.0)
+    papers = [_pin_paper("NoScore", "x", score=None, url="noscore")]
+    assert ex._apply_min_score(papers) == []
+
+
+# ---------------------------------------------------------------------------
 # fetch_zotero_corpus
 # ---------------------------------------------------------------------------
 
@@ -372,3 +413,101 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
     assert len(sent) == 1, "Email should be sent even with no papers when send_empty=true"
     _, _, body = sent[0]
     assert "text/html" in body
+
+
+# ---------------------------------------------------------------------------
+# E2E: min_score floor interaction with run()
+# ---------------------------------------------------------------------------
+
+
+def test_run_min_score_filters_all_skips_email(config, monkeypatch):
+    """All papers below min_score and send_empty=false -> no email."""
+    import smtplib
+
+    from omegaconf import open_dict
+
+    from tests.canned_responses import (
+        make_sample_paper,
+        make_stub_openai_client,
+        make_stub_smtp,
+        make_stub_zotero_client,
+    )
+
+    with open_dict(config):
+        config.executor.source = ["arxiv"]
+        config.executor.reranker = "api"
+        config.executor.send_empty = False
+        config.executor.min_score = 11.0  # stub embeddings give every paper score 10.0
+
+    stub_zot = make_stub_zotero_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    stub_client = make_stub_openai_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.OpenAI", lambda **kw: stub_client)
+    monkeypatch.setattr("zotero_arxiv_daily.reranker.api.OpenAI", lambda **kw: stub_client)
+
+    retrieved = [make_sample_paper(title="Below floor paper", score=None)]
+    import zotero_arxiv_daily.retriever.arxiv_retriever  # noqa: F401
+
+    from zotero_arxiv_daily.retriever.base import registered_retrievers
+
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: retrieved)
+
+    sent = []
+    monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
+    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
+
+    executor = Executor(config)
+    executor.run()
+
+    assert len(sent) == 0, "No email when every paper falls below min_score"
+
+
+def test_run_pinned_paper_bypasses_min_score(config, monkeypatch):
+    """A keyword-pinned paper survives the min_score floor."""
+    import smtplib
+
+    from omegaconf import open_dict
+
+    from tests.canned_responses import (
+        make_sample_paper,
+        make_stub_openai_client,
+        make_stub_smtp,
+        make_stub_zotero_client,
+    )
+
+    with open_dict(config):
+        config.executor.source = ["arxiv"]
+        config.executor.reranker = "api"
+        config.executor.send_empty = False
+        config.executor.min_score = 11.0
+        config.executor.pin_keywords = ["exoskeleton"]
+
+    stub_zot = make_stub_zotero_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    stub_client = make_stub_openai_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.OpenAI", lambda **kw: stub_client)
+    monkeypatch.setattr("zotero_arxiv_daily.reranker.api.OpenAI", lambda **kw: stub_client)
+
+    retrieved = [make_sample_paper(title="Exoskeleton control paper", score=None)]
+    import zotero_arxiv_daily.retriever.arxiv_retriever  # noqa: F401
+
+    from zotero_arxiv_daily.retriever.base import registered_retrievers
+
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: retrieved)
+
+    sent = []
+    monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
+    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
+
+    executor = Executor(config)
+    executor.run()
+
+    assert len(sent) == 1, "Pinned paper must bypass the min_score floor"
+    _, _, body = sent[0]
+    import base64
+    decoded = base64.b64decode(
+        "".join(l for l in body.splitlines() if not l.startswith(("Content-", "MIME-", "From:", "To:", "Subject:")))
+    ).decode("utf-8", errors="ignore")
+    assert "Exoskeleton control paper" in decoded
