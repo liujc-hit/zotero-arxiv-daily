@@ -45,6 +45,7 @@
   - arxiv
   - biorxiv
   - medrxiv
+  - chemrxiv
 
 ## 📷 Screenshot
 ![screenshot](./assets/screenshot.png)
@@ -90,6 +91,7 @@ llm:
   api:
     key: ${oc.env:OPENAI_API_KEY}
     base_url: ${oc.env:OPENAI_API_BASE}
+  api_mode: chat_completion # Or response to use the Responses API.
   generation_kwargs:
     model: gpt-4o-mini
 
@@ -123,6 +125,8 @@ source:
     category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
   medrxiv:
     category: null # The categories of target medrxiv papers. Find categories from [here](https://www.medrxiv.org/) Example: ["psychiatry and clinical psychology", "neurology"]
+  chemrxiv:
+    include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
 
 email:
   sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
@@ -135,8 +139,9 @@ llm:
   api:
     key: ??? # API Key of your LLM API. Example: sk-xxx
     base_url: ??? # API URL of your LLM API. Example: https://api.openai.com/v1
+  api_mode: chat_completion # The LLM API to use. Options: chat_completion or response.
   generation_kwargs:
-  # Arguments for the LLM API. See [here](https://platform.openai.com/docs/api-reference/chat/create) for more details.
+  # Arguments for the selected LLM API.
     max_tokens: 16384
     model: ???
   language: English # Preferred language for the TL;DR. Example: English
@@ -162,7 +167,7 @@ executor:
   pin_keywords: null # List of keywords to force-pin to the TOP of the email, on top of the recommendation algorithm. A paper whose title OR abstract contains any keyword (case-insensitive) is pinned. Pinned papers do NOT count against max_paper_num. Example: ["Mamba","state space model"]
   max_pinned_num: 20 # Upper bound on pinned papers per email. Matches beyond this cap fall back to the normal recommendation pool. Example: 20
   enrich_workers: 8 # Number of parallel workers for fetching full text + generating TL;DR/affiliations for the final top-N papers. Raise for faster enrichment, lower if your LLM/embedding provider rate-limits you. Example: 8
-  source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv']
+  source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
   reranker: local # The reranker to use. Example: 'local' or 'api'
 ```
 
