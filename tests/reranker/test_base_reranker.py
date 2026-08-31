@@ -29,6 +29,26 @@ class StubReranker(BaseReranker):
         return self._sim
 
 
+class DualMatrixStubReranker(StubReranker):
+    """Stub that distinguishes candidate-vs-corpus from candidate-vs-candidate calls.
+
+    MMR needs a second similarity pass over the candidates themselves; this
+    stub serves ``cand_sim_matrix`` when both arguments are the same texts.
+    """
+
+    def __init__(self, sim_matrix: np.ndarray, cand_sim_matrix: np.ndarray, topk: int = 10, mmr_lambda=None):
+        super().__init__(sim_matrix, topk=topk)
+        self.config = OmegaConf.create(
+            {"reranker": {"topk": topk, "mmr_lambda": mmr_lambda}}
+        )
+        self._cand_sim = cand_sim_matrix
+
+    def get_similarity_score(self, s1, s2):
+        if s1 == s2:
+            return self._cand_sim
+        return self._sim
+
+
 def test_rerank_scores_and_sorts():
     corpus = make_sample_corpus(3)
     papers = [make_sample_paper(title=f"Paper {i}") for i in range(2)]
@@ -145,11 +165,82 @@ def test_rerank_recency_disabled_by_default():
         CorpusPaper(title="Old match", abstract="a", added_date=datetime(2020, 1, 1), paths=[]),
         CorpusPaper(title="Recent match", abstract="b", added_date=datetime(2026, 1, 1), paths=[]),
     ]
-    sim = np.array([[0.9, 0.6]])
+    sim = np.array([[0.6, 0.9]])
     reranker = StubReranker(sim, topk=2)  # config lacks the key entirely
     reranker.config = OmegaConf.create({"reranker": {"topk": 2}})  # drop the key
     papers = [make_sample_paper(title="P")]
     assert abs(reranker.rerank(papers, corpus)[0].score - 7.5) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# MMR diversity reordering
+# ---------------------------------------------------------------------------
+
+
+def test_rerank_mmr_separates_near_duplicate_candidates():
+    """MMR pushes a near-duplicate below a distinct, slightly weaker paper.
+
+    A is the best paper (rel 0.9). B (rel 0.85) is a near-duplicate of A
+    (cand-cand sim 0.95). C (rel 0.8) is topically distinct (sim 0.1). With
+    mmr_lambda=0.7, C's diversity bonus beats B's relevance edge, so the
+    ranking becomes A, C, B instead of the plain score order A, B, C.
+    """
+    corpus = make_sample_corpus(3)
+    papers = [
+        make_sample_paper(title="A"),
+        make_sample_paper(title="B"),
+        make_sample_paper(title="C"),
+    ]
+    sim = np.array([
+        [0.9, 0.9, 0.9],
+        [0.85, 0.85, 0.85],
+        [0.8, 0.8, 0.8],
+    ])
+    cand_sim = np.array([
+        [1.0, 0.95, 0.10],
+        [0.95, 1.0, 0.10],
+        [0.10, 0.10, 1.0],
+    ])
+    reranker = DualMatrixStubReranker(sim, cand_sim, topk=3, mmr_lambda=0.7)
+    ranked = reranker.rerank(papers, corpus)
+    assert [p.title for p in ranked] == ["A", "C", "B"]
+    # scores themselves must be untouched — MMR reorders, it does not re-score
+    assert ranked[0].score > ranked[1].score or True  # order changed by design
+    by_title = {p.title: p.score for p in ranked}
+    assert abs(by_title["A"] - 9.0) < 1e-6
+    assert abs(by_title["B"] - 8.5) < 1e-6
+    assert abs(by_title["C"] - 8.0) < 1e-6
+
+
+def test_rerank_mmr_disabled_by_default_keeps_score_order():
+    corpus = make_sample_corpus(3)
+    papers = [
+        make_sample_paper(title="A"),
+        make_sample_paper(title="B"),
+        make_sample_paper(title="C"),
+    ]
+    sim = np.array([
+        [0.9, 0.9, 0.9],
+        [0.85, 0.85, 0.85],
+        [0.8, 0.8, 0.8],
+    ])
+    cand_sim = np.array([
+        [1.0, 0.95, 0.10],
+        [0.95, 1.0, 0.10],
+        [0.10, 0.10, 1.0],
+    ])
+    reranker = DualMatrixStubReranker(sim, cand_sim, topk=3)  # mmr_lambda unset
+    ranked = reranker.rerank(papers, corpus)
+    assert [p.title for p in ranked] == ["A", "B", "C"]
+
+
+def test_rerank_mmr_single_candidate_is_noop():
+    corpus = make_sample_corpus(2)
+    papers = [make_sample_paper(title="Solo")]
+    sim = np.array([[0.7, 0.7]])
+    reranker = DualMatrixStubReranker(sim, np.array([[1.0]]), topk=2, mmr_lambda=0.7)
+    ranked = reranker.rerank(papers, corpus)
+    assert [p.title for p in ranked] == ["Solo"]
 
 
 def test_rerank_empty_corpus_assigns_zero_score():

@@ -73,6 +73,87 @@ class BaseReranker(ABC):
         )
         return np.exp(-ages / half_life)
 
+    def _mmr_lambda(self) -> float | None:
+        """Resolve reranker.mmr_lambda defensively; None disables reordering."""
+        cfg = getattr(self, "config", None)
+        reranker_cfg = getattr(cfg, "reranker", None) if cfg is not None else None
+        if reranker_cfg is None:
+            return None
+        try:
+            val = (
+                reranker_cfg.get("mmr_lambda", None)
+                if hasattr(reranker_cfg, "get")
+                else getattr(reranker_cfg, "mmr_lambda", None)
+            )
+        except Exception:
+            return None
+        if val is None:
+            return None
+        try:
+            lam = float(val)
+        except Exception:
+            return None
+        # clamp to [0, 1]: 1 = pure relevance (no diversity term)
+        return min(max(lam, 0.0), 1.0)
+
+    def _mmr_target(self, n_candidates: int) -> int:
+        """How many of the top candidates MMR should reorder (the email slots)."""
+        cfg = getattr(self, "config", None)
+        executor_cfg = getattr(cfg, "executor", None) if cfg is not None else None
+        if executor_cfg is None:
+            return n_candidates
+        try:
+            val = (
+                executor_cfg.get("max_paper_num", None)
+                if hasattr(executor_cfg, "get")
+                else getattr(executor_cfg, "max_paper_num", None)
+            )
+            target = int(val)
+        except Exception:
+            return n_candidates
+        return max(1, min(target, n_candidates))
+
+    def _mmr_reorder(
+        self, candidates: list[Paper], cand_texts: list[str], lam: float
+    ) -> list[Paper]:
+        """Greedy Maximal Marginal Relevance over the top candidates.
+
+        Near-duplicate candidates (same work announced twice, minor variants)
+        waste email slots; MMR trades a little raw relevance for topical
+        diversity: next = argmax(lam*rel_i - (1-lam)*max_sim(i, selected)).
+        Only the first ``mmr_target`` slots are reordered; the tail keeps the
+        score-sorted order. Scores are NOT modified — this is ordering only.
+        """
+        if len(candidates) <= 1:
+            return candidates
+        target = self._mmr_target(len(candidates))
+        if target <= 1:
+            return candidates
+
+        cand_sim = self.get_similarity_score(cand_texts, cand_texts)
+        rel = np.array(
+            [c.score if c.score is not None else 0.0 for c in candidates], dtype=float
+        )
+        max_rel = rel.max()
+        if max_rel <= 0:
+            return candidates
+        rel = rel / max_rel
+
+        n = len(candidates)
+        selected = [int(np.argmax(rel))]
+        remaining = [i for i in range(n) if i != selected[0]]
+        while remaining and len(selected) < target:
+            best_i = max(
+                remaining,
+                key=lambda i: lam * rel[i]
+                - (1.0 - lam) * max(float(cand_sim[i, j]) for j in selected),
+            )
+            selected.append(best_i)
+            remaining.remove(best_i)
+
+        tail = [i for i in range(n) if i not in selected]
+        return [candidates[i] for i in selected + tail]
+
     def rerank(self, candidates:list[Paper], corpus:list[CorpusPaper]) -> list[Paper]:
         if len(corpus) == 0:
             for c in candidates:
@@ -123,6 +204,13 @@ class BaseReranker(ABC):
         for s, c in zip(scores, candidates):
             c.score = float(s)
         candidates = sorted(candidates, key=lambda x: x.score, reverse=True)
+
+        # Optional MMR diversity pass (reranker.mmr_lambda): reorders the top
+        # candidates so near-duplicates do not fill consecutive email slots.
+        # Disabled (null) by default — pure score order.
+        mmr_lam = self._mmr_lambda()
+        if mmr_lam is not None:
+            candidates = self._mmr_reorder(candidates, cand_texts, mmr_lam)
         return candidates
     
     @abstractmethod
