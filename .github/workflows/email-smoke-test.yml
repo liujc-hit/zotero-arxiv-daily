@@ -1,0 +1,84 @@
+name: Email smoke test (one-shot)
+
+# One-shot end-to-end test of the new recommendation code + corrected config.
+# The config below is the corrected CUSTOM_CONFIG (env-var references only,
+# no secrets) and is written to config/custom.yaml before the run, so this
+# workflow does NOT depend on the CUSTOM_CONFIG repo variable.
+# Trigger: only when this file itself changes (path filter), so ordinary
+# pushes never fire it. Safe to delete after use.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/email-smoke-test.yml
+
+jobs:
+  calculate-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Run script
+        env:
+          ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
+          ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
+          SENDER: ${{ secrets.SENDER }}
+          RECEIVER: ${{ secrets.RECEIVER }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+        run: |
+          cat > config/custom.yaml <<'EOF'
+          zotero:
+            user_id: ${oc.env:ZOTERO_ID}
+            api_key: ${oc.env:ZOTERO_KEY}
+            # Collection paths start at the TOP-LEVEL collection name (no "我的文库/" prefix).
+            include_path: ["当代外骨骼专版/偏好学习/**","当代外骨骼专版/外骨骼与生物力学/**","当代外骨骼专版/生物工程与能量优化/**","当代外骨骼专版/Preference-based learning/**","当代外骨骼专版/Human in the loop/**","当代外骨骼专版/动态偏好建模/**","当代外骨骼专版/偏好测量方法/**","当代外骨骼专版/偏好与耗氧量/**"]
+
+          email:
+            sender: ${oc.env:SENDER}
+            receiver: ${oc.env:RECEIVER}
+            smtp_server: smtp.163.com
+            smtp_port: 465
+            sender_password: ${oc.env:SENDER_PASSWORD}
+
+          llm:
+            api:
+              key: ${oc.env:OPENAI_API_KEY}
+              base_url: ${oc.env:OPENAI_API_BASE}
+            generation_kwargs:
+              model: ali-qwen3.6-plus
+
+          source:
+            arxiv:
+              category: ["cs.AI","cs.CV","cs.RO","cs.GR","cs.LG","cs.HC","eess.SY","eess.SP","q-bio.TO","physics.bio-ph","q-bio.QM","stat.ML","cs.NE"]
+              include_cross_list: false
+            biorxiv:
+              category: ["bioengineering","biophysics","physiology","neuroscience","bioinformatics","systems biology","animal behavior and cognition"]
+            medrxiv:
+              category: ["rehabilitation medicine and physical therapy","orthopedics","neurology","sports medicine","radiology and imaging","health informatics"]
+
+          executor:
+            debug: false
+            send_empty: false
+            max_paper_num: 20
+            min_score: 5.0
+            pin_keywords: ["exoskeleton","wearable robot","powered orthosis","preference learning","preference-based","human-in-the-loop","human in the loop","personaliz","adaptive assist","assistive torq","metabolic cost"]
+            max_pinned_num: 10
+            enrich_workers: 8
+            source: ['arxiv','biorxiv','medrxiv']
+            reranker: local
+
+          reranker:
+            topk: 10
+            recency_half_life_days: 180
+            mmr_lambda: 0.7
+          EOF
+          echo "Use custom config:"
+          cat config/custom.yaml
+          uv run src/zotero_arxiv_daily/main.py
