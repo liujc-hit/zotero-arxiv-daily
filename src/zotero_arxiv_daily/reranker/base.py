@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import datetime
 from omegaconf import DictConfig
 from ..protocol import Paper, CorpusPaper
 import numpy as np
@@ -37,6 +38,41 @@ class BaseReranker(ABC):
         except Exception:
             return DEFAULT_TOPK
 
+    def _recency_half_life_days(self) -> float | None:
+        """Resolve reranker.recency_half_life_days defensively; None disables.
+
+        When set, the top-k matched corpus papers are weighted by
+        exp(-age_days / half_life) so recently added Zotero papers (the user's
+        current research direction) dominate the score.
+        """
+        cfg = getattr(self, "config", None)
+        reranker_cfg = getattr(cfg, "reranker", None) if cfg is not None else None
+        if reranker_cfg is None:
+            return None
+        try:
+            val = (
+                reranker_cfg.get("recency_half_life_days", None)
+                if hasattr(reranker_cfg, "get")
+                else getattr(reranker_cfg, "recency_half_life_days", None)
+            )
+        except Exception:
+            return None
+        if val is None:
+            return None
+        try:
+            half_life = float(val)
+        except Exception:
+            return None
+        return half_life if half_life > 0 else None
+
+    def _recency_weights(self, corpus: list[CorpusPaper], half_life: float) -> np.ndarray:
+        """exp-decay weight per corpus paper based on Zotero added_date age."""
+        now = datetime.now()
+        ages = np.array(
+            [max((now - c.added_date).days, 0) for c in corpus], dtype=float
+        )
+        return np.exp(-ages / half_life)
+
     def rerank(self, candidates:list[Paper], corpus:list[CorpusPaper]) -> list[Paper]:
         if len(corpus) == 0:
             for c in candidates:
@@ -61,15 +97,28 @@ class BaseReranker(ABC):
         # "recommended papers feel unrelated". Taking the best k matches keeps a
         # paper's score driven by the corpus it actually aligns with, while still
         # tolerating multiple research directions.
+        #
+        # Optional recency weighting (reranker.recency_half_life_days): within
+        # those k best matches, papers added to Zotero more recently get an
+        # exp(-age/half_life) weight, so the user's current research direction
+        # dominates. Disabled by default (null) — plain top-k mean.
         k = min(self._topk(), n_corpus)
         if k >= n_corpus:
-            topk_sim = sim
+            topk_idx = np.tile(np.arange(n_corpus), (len(candidates), 1))
         else:
             # indices of the k largest similarities per candidate row
             topk_idx = np.argpartition(sim, -k, axis=1)[:, -k:]
-            rows = np.arange(len(candidates))[:, None]
-            topk_sim = sim[rows, topk_idx]
-        scores = topk_sim.mean(axis=1) * 10.0  # keep the historical ~0-10 score scale
+        topk_sim = np.take_along_axis(sim, topk_idx, axis=1)
+
+        half_life = self._recency_half_life_days()
+        if half_life is not None:
+            rec_weights = self._recency_weights(corpus, half_life)[topk_idx]  # (n_cand, k)
+            denom = rec_weights.sum(axis=1)
+            denom[denom == 0] = 1.0  # all-decayed edge case: fall back to mean
+            scores = (topk_sim * rec_weights).sum(axis=1) / denom
+        else:
+            scores = topk_sim.mean(axis=1)
+        scores = scores * 10.0  # keep the historical ~0-10 score scale
 
         for s, c in zip(scores, candidates):
             c.score = float(s)

@@ -35,6 +35,7 @@ llm:
 
 reranker:
   topk: 10 # Score each candidate as the mean of its top-k most similar Zotero papers. Lower = stricter/more focused, higher = smoother/broader. Must be >= 1.
+  recency_half_life_days: null # When set, the top-k matched Zotero papers are weighted by exp(-age_days/half_life) so recently added papers (your current direction) dominate the score. null disables weighting. Example: 180
   local:
     model: jinaai/jina-embeddings-v5-text-nano-retrieval # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
     encode_kwargs:

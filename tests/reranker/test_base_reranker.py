@@ -14,12 +14,15 @@ from tests.canned_responses import make_sample_paper, make_sample_corpus
 class StubReranker(BaseReranker):
     """Reranker with a controlled similarity matrix for deterministic tests.
 
-    Accepts an optional ``topk`` so tests can exercise top-k aggregation with a
-    known window size without depending on config plumbing.
+    Accepts optional ``topk`` and ``recency_half_life_days`` so tests can
+    exercise aggregation behavior with a known window size without depending
+    on config plumbing.
     """
 
-    def __init__(self, sim_matrix: np.ndarray, topk: int = 10):
-        self.config = OmegaConf.create({"reranker": {"topk": topk}})
+    def __init__(self, sim_matrix: np.ndarray, topk: int = 10, recency_half_life_days=None):
+        self.config = OmegaConf.create(
+            {"reranker": {"topk": topk, "recency_half_life_days": recency_half_life_days}}
+        )
         self._sim = sim_matrix
 
     def get_similarity_score(self, s1, s2):
@@ -107,6 +110,46 @@ def test_rerank_single_candidate_single_corpus():
     ranked = reranker.rerank(papers, corpus)
     assert len(ranked) == 1
     assert ranked[0].score is not None
+
+
+def test_rerank_recency_weighting_reweights_topk_matches():
+    """recency_half_life_days shifts weight toward recently-added corpus papers.
+
+    The candidate is more similar to the OLD paper (0.9) than the RECENT one
+    (0.6). With recency off, the top-k mean is 0.75. With a short half-life,
+    the old paper's weight decays to ~0 and the score collapses onto the
+    recent paper's similarity (~0.6).
+    """
+    corpus = [
+        CorpusPaper(title="Old match", abstract="a", added_date=datetime(2020, 1, 1), paths=[]),
+        CorpusPaper(title="Recent match", abstract="b", added_date=datetime(2026, 1, 1), paths=[]),
+    ]
+    # rerank() sorts the corpus by added_date desc before embedding, so the
+    # similarity matrix columns follow the SORTED order [Recent, Old].
+    sim = np.array([[0.6, 0.9]])
+    papers = [make_sample_paper(title="P")]
+
+    off = StubReranker(sim, topk=2)
+    assert abs(off.rerank(papers, corpus)[0].score - 7.5) < 1e-6
+
+    on = StubReranker(sim, topk=2, recency_half_life_days=90)
+    weighted = on.rerank(papers, corpus)[0].score
+    # exp(-age_old/90) is ~1e-12 while exp(-age_recent/90) is ~0.07, so the
+    # weighted mean converges to the recent similarity (0.6 -> score 6.0).
+    assert abs(weighted - 6.0) < 0.5
+
+
+def test_rerank_recency_disabled_by_default():
+    """No recency_half_life_days in config -> exact plain top-k mean."""
+    corpus = [
+        CorpusPaper(title="Old match", abstract="a", added_date=datetime(2020, 1, 1), paths=[]),
+        CorpusPaper(title="Recent match", abstract="b", added_date=datetime(2026, 1, 1), paths=[]),
+    ]
+    sim = np.array([[0.9, 0.6]])
+    reranker = StubReranker(sim, topk=2)  # config lacks the key entirely
+    reranker.config = OmegaConf.create({"reranker": {"topk": 2}})  # drop the key
+    papers = [make_sample_paper(title="P")]
+    assert abs(reranker.rerank(papers, corpus)[0].score - 7.5) < 1e-6
 
 
 def test_rerank_empty_corpus_assigns_zero_score():
