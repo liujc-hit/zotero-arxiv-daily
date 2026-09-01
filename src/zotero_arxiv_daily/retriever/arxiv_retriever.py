@@ -176,6 +176,7 @@ class ArxivRetriever(BaseRetriever):
             url=raw_paper.entry_id,
             pdf_url=pdf_url,
             full_text=None,
+            is_preprint=True,
         )
 
     def fetch_full_text(self, paper: Paper) -> str | None:

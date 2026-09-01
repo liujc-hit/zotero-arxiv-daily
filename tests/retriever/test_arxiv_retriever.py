@@ -62,6 +62,7 @@ def test_arxiv_retriever(config, mock_feedparser, monkeypatch):
     assert set(p.title for p in papers) == set(e.title for e in new_entries)
     # Full text is intentionally left for lazy fetching.
     assert all(p.full_text is None for p in papers)
+    assert all(p.is_preprint is True for p in papers)
 
 
 def test_run_with_hard_timeout_returns_value():
