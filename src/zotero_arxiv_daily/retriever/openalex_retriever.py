@@ -6,9 +6,11 @@ from typing import ClassVar, Final, Protocol, TypeGuard, override
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from ..identifiers import normalize_doi
 from ..protocol import Paper
 from .base import BaseRetriever, register_retriever
 from .openalex_client import JsonObject, JsonValue, OpenAlexClient
+from .openalex_metadata import parse_openalex_publication_metadata
 from .openalex_venue_catalog import (
     ALL_VENUES,
     CONFERENCE_VENUES,
@@ -153,6 +155,10 @@ class OpenAlexRetriever(BaseRetriever):
             tuple(normalized_api_keys), anonymous_fallback=allow_anonymous
         )
 
+    @property
+    def client(self) -> OpenAlexClient:
+        return self._client
+
     def _retrieve_batch(
         self,
         identifier_filter: str,
@@ -210,16 +216,11 @@ class OpenAlexRetriever(BaseRetriever):
         deduplicated: list[JsonObject] = []
         seen_keys: set[str] = set()
         for work in collection:
-            doi = work.get("doi")
-            if doi:
-                normalized_doi = _text(doi).strip().lower()
-                for prefix in (
-                    "https://doi.org/",
-                    "http://doi.org/",
-                    "https://dx.doi.org/",
-                    "http://dx.doi.org/",
-                ):
-                    normalized_doi = normalized_doi.removeprefix(prefix)
+            doi_value = work.get("doi")
+            normalized_doi = normalize_doi(
+                doi_value if isinstance(doi_value, str) else None
+            )
+            if normalized_doi is not None:
                 key = f"doi:{normalized_doi}"
             else:
                 key = f"id:{_text(work['id']).strip().lower()}"
@@ -262,6 +263,8 @@ class OpenAlexRetriever(BaseRetriever):
         abstract = " ".join(token for _, token in occurrences)
 
         primary_location = _mapping(raw_paper.get("primary_location"))
+        source = _mapping(primary_location.get("source"))
+        metadata = parse_openalex_publication_metadata(raw_paper, source)
         best_oa_location = _mapping(raw_paper.get("best_oa_location"))
         url_value = (
             raw_paper.get("doi")
@@ -278,4 +281,8 @@ class OpenAlexRetriever(BaseRetriever):
             url=_text(url_value),
             pdf_url=pdf_url,
             full_text=None,
+            doi=metadata.doi,
+            publisher=metadata.publisher,
+            issns=metadata.issns,
+            is_preprint=metadata.is_preprint,
         )

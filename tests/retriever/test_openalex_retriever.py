@@ -210,8 +210,14 @@ def test_convert_to_paper_maps_openalex_fields_and_prefers_best_links(openalex_c
         "primary_location": {
             "landing_page_url": "https://publisher.example/article",
             "pdf_url": "https://publisher.example/article.pdf",
+            "source": {
+                "host_organization_name": "Example Publishing",
+                "issn": ["0028-0836", "2434561x", "invalid"],
+                "issn_l": "0028-0836",
+            },
         },
         "best_oa_location": {"pdf_url": "https://oa.example/best.pdf"},
+        "type": "article",
     }
 
     paper = OpenAlexRetriever(openalex_config).convert_to_paper(raw)
@@ -223,6 +229,10 @@ def test_convert_to_paper_maps_openalex_fields_and_prefers_best_links(openalex_c
     assert paper.url == "https://doi.org/10.1234/MixedCase"
     assert paper.pdf_url == "https://oa.example/best.pdf"
     assert paper.full_text is None
+    assert paper.doi == "10.1234/mixedcase"
+    assert paper.publisher == "Example Publishing"
+    assert paper.issns == ("0028-0836", "2434-561X")
+    assert paper.is_preprint is False
 
 
 @pytest.mark.parametrize(
