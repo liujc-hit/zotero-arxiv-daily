@@ -27,6 +27,20 @@ jobs:
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
           OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
           OPENALEX_API_KEY_2: ${{ secrets.OPENALEX_API_KEY_2 }}
+          NIH_API: ${{ secrets.NIH_API }}
+          IEEE_XPLORE_API: ${{ secrets.IEEE_XPLORE_API }}
+          ELSEVIER_API: ${{ secrets.ELSEVIER_API }}
+          SPRINGER_API: ${{ secrets.SPRINGER_API }}
+          CROSSREF_MAILTO: ${{ vars.CROSSREF_MAILTO }}
+          PUBMED_EMAIL: ${{ vars.PUBMED_EMAIL }}
+          PUBMED_ISSNS: ${{ vars.PUBMED_ISSNS || '[]' }}
+          PAPER_SOURCES: ${{ vars.PAPER_SOURCES || '["arxiv","openalex"]' }}
+          ABSTRACT_ENRICHMENT_ENABLED: ${{ vars.ABSTRACT_ENRICHMENT_ENABLED || 'false' }}
+          PUBMED_ENABLED: ${{ vars.PUBMED_ENABLED || 'false' }}
+          IEEE_ENABLED: ${{ vars.IEEE_ENABLED || 'false' }}
+          ELSEVIER_ENABLED: ${{ vars.ELSEVIER_ENABLED || 'false' }}
+          SPRINGER_ENABLED: ${{ vars.SPRINGER_ENABLED || 'false' }}
+          VENUE_PRESTIGE_ENABLED: ${{ vars.VENUE_PRESTIGE_ENABLED || 'false' }}
           OPENALEX_ALLOW_ANONYMOUS: ${{ vars.OPENALEX_ALLOW_ANONYMOUS || 'false' }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
         run: |
