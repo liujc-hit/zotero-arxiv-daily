@@ -71,12 +71,17 @@ def test_biorxiv_convert_to_paper(config):
     with open_dict(config.source):
         config.source.biorxiv = {"category": ["bioinformatics"]}
     retriever = BiorxivRetriever(config)
-    raw = SAMPLE_BIORXIV_API_RESPONSE["collection"][0]
+    raw = dict(SAMPLE_BIORXIV_API_RESPONSE["collection"][0])
+    raw["doi"] = "10.1101/2026.03.01.MixedCase"
     paper = retriever.convert_to_paper(raw)
+    assert paper is not None
     assert paper.title == "A biorxiv paper"
     assert paper.source == "biorxiv"
+    assert paper.pdf_url is not None
     assert "biorxiv.org" in paper.pdf_url
     assert paper.authors == ["Smith, J.", "Doe, A.", "Lee, K."]
+    assert paper.doi == "10.1101/2026.03.01.mixedcase"
+    assert paper.is_preprint is True
 
 
 def test_biorxiv_requires_category(config):

@@ -2,6 +2,7 @@ from datetime import datetime
 
 import requests
 from .base import BaseRetriever, register_retriever
+from ..identifiers import normalize_doi
 from ..protocol import Paper
 from loguru import logger
 from typing import Any
@@ -62,5 +63,7 @@ class BiorxivRetriever(BaseRetriever):
             abstract=abstract,
             url=pdf_url,
             pdf_url=pdf_url,
-            full_text=full_text
+            full_text=full_text,
+            doi=normalize_doi(raw_paper["doi"]),
+            is_preprint=True,
         )
