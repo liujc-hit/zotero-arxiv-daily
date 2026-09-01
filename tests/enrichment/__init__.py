@@ -1,0 +1,1 @@
+"""Focused abstract-enrichment contracts."""
