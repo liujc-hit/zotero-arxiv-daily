@@ -25,10 +25,11 @@ jobs:
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+          OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+          OPENALEX_API_KEY_2: ${{ secrets.OPENALEX_API_KEY_2 }}
+          OPENALEX_ALLOW_ANONYMOUS: ${{ vars.OPENALEX_ALLOW_ANONYMOUS || 'false' }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
         run: |
           export DEBUG=true
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
-          echo "Use custom config: "
-          cat config/custom.yaml
           uv run src/zotero_arxiv_daily/main.py
