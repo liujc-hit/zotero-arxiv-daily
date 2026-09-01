@@ -10,9 +10,10 @@ from zotero_arxiv_daily.protocol import CorpusPaper, Paper
 # OpenAI client stub
 # ---------------------------------------------------------------------------
 
-_AFFILIATION_MARKER = "You are an assistant who perfectly extracts affiliations"
-_AFFILIATION_RESPONSE = '["TsingHua University","Peking University"]'
-_TLDR_RESPONSE = "Hello! How can I assist you today?"
+_PAPER_DIGEST_RESPONSE = (
+    '{"tldr":"Hello! How can I assist you today?",'
+    '"affiliations":["TsingHua University","Peking University"]}'
+)
 
 
 def _make_chat_response(content: str) -> SimpleNamespace:
@@ -32,17 +33,11 @@ def _make_chat_response(content: str) -> SimpleNamespace:
 
 
 def _stub_chat_create(**kwargs):
-    messages = kwargs.get("messages", [])
-    request_str = str(messages)
-    if _AFFILIATION_MARKER in request_str:
-        return _make_chat_response(_AFFILIATION_RESPONSE)
-    return _make_chat_response(_TLDR_RESPONSE)
+    return _make_chat_response(_PAPER_DIGEST_RESPONSE)
 
 
 def _stub_response_create(**kwargs):
-    request_str = str(kwargs.get("input", []))
-    content = _AFFILIATION_RESPONSE if _AFFILIATION_MARKER in request_str else _TLDR_RESPONSE
-    return SimpleNamespace(output_text=content)
+    return SimpleNamespace(output_text=_PAPER_DIGEST_RESPONSE)
 
 
 def _stub_embeddings_create(**kwargs):

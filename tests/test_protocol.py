@@ -1,21 +1,25 @@
-"""Tests for zotero_arxiv_daily.protocol: Paper.generate_tldr, Paper.generate_affiliations."""
+"""Tests for the Paper digest delegation and compatible LLM transport export."""
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
 from omegaconf import OmegaConf
 
-from tests.canned_responses import make_sample_paper, make_stub_openai_client
+from tests.canned_responses import make_sample_paper
 from zotero_arxiv_daily.protocol import _request_llm
 
 
-MINIMAX_M2_MODELS = (
-    "MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
-    "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
-    "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
-)
+MINIMAX_M2_MODELS = ("MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.1-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.7", "MiniMax-M2.7-highspeed")
 REQUEST_MESSAGES = [{"role": "user", "content": "Summarize"}]
+EXPECTED_PAPER_DIGEST_SCHEMA = {
+    "type": "object",
+    "properties": {"tldr": {"type": "string"}, "affiliations": {"type": "array", "items": {"type": "string"}}},
+    "required": ["tldr", "affiliations"],
+    "additionalProperties": False,
+}
+EXPECTED_PAPER_DIGEST_CONFIG = {"name": "paper_digest", "strict": True, "schema": EXPECTED_PAPER_DIGEST_SCHEMA}
 
 
 @pytest.fixture()
@@ -46,146 +50,68 @@ def recorder_client():
     return client, recorded_requests
 
 
-# ---------------------------------------------------------------------------
-# generate_tldr
-# ---------------------------------------------------------------------------
+def _digest_client(content):
+    recorded_requests = []
 
-
-@pytest.mark.parametrize("api_mode", ["chat_completion", "response"])
-def test_tldr_returns_response(llm_params, api_mode):
-    llm_params["api_mode"] = api_mode
-    client = make_stub_openai_client()
-    paper = make_sample_paper()
-    result = paper.generate_tldr(client, llm_params)
-    assert result == "Hello! How can I assist you today?"
-    assert paper.tldr == result
-
-
-def test_tldr_without_abstract_or_fulltext(llm_params):
-    client = make_stub_openai_client()
-    paper = make_sample_paper(abstract="", full_text=None)
-    result = paper.generate_tldr(client, llm_params)
-    assert "Failed to generate TLDR" in result
-
-
-def test_tldr_falls_back_to_abstract_on_error(llm_params):
-    paper = make_sample_paper()
-
-    # Client whose create() raises
-    from types import SimpleNamespace
-
-    broken_client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(create=lambda **kw: (_ for _ in ()).throw(RuntimeError("API down")))
+    def create_chat_completion(**kwargs):
+        recorded_requests.append(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
-    )
-    result = paper.generate_tldr(broken_client, llm_params)
-    assert result == paper.abstract
-
-
-def test_tldr_truncates_long_prompt(llm_params):
-    client = make_stub_openai_client()
-    paper = make_sample_paper(full_text="word " * 10000)
-    result = paper.generate_tldr(client, llm_params)
-    assert result is not None
-
-
-def test_response_mode_maps_max_tokens(llm_params):
-    from types import SimpleNamespace
-
-    received_kwargs = {}
 
     def create_response(**kwargs):
-        received_kwargs.update(kwargs)
-        return SimpleNamespace(output_text="Summary")
+        recorded_requests.append(kwargs)
+        return SimpleNamespace(output_text=content)
 
     client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create_chat_completion)),
         responses=SimpleNamespace(create=create_response),
     )
-    llm_params["api_mode"] = "response"
-    paper = make_sample_paper()
-
-    assert paper.generate_tldr(client, llm_params) == "Summary"
-    assert received_kwargs["max_output_tokens"] == 16384
-    assert "max_tokens" not in received_kwargs
-
-
-def test_invalid_api_mode_falls_back_to_abstract(llm_params):
-    llm_params["api_mode"] = "invalid"
-    paper = make_sample_paper()
-
-    assert paper.generate_tldr(make_stub_openai_client(), llm_params) == paper.abstract
-
-
-# ---------------------------------------------------------------------------
-# generate_affiliations
-# ---------------------------------------------------------------------------
+    return client, recorded_requests
 
 
 @pytest.mark.parametrize("api_mode", ["chat_completion", "response"])
-def test_affiliations_returns_parsed_list(llm_params, api_mode):
+def test_generate_tldr_and_affiliations_uses_one_call_and_sets_both_fields(
+    llm_params, api_mode
+):
+    # Given
     llm_params["api_mode"] = api_mode
-    client = make_stub_openai_client()
+    content = json.dumps(
+        {
+            "tldr": "  A concise digest.  ",
+            "affiliations": [" University B ", "University A", "University B", " ", "University A"],
+        }
+    )
+    client, recorded_requests = _digest_client(content)
     paper = make_sample_paper()
-    result = paper.generate_affiliations(client, llm_params)
-    assert isinstance(result, list)
-    assert "TsingHua University" in result
-    assert "Peking University" in result
+
+    # When
+    result = paper.generate_tldr_and_affiliations(client, llm_params)
+
+    # Then
+    assert result == ("A concise digest.", ["University B", "University A"])
+    assert paper.tldr == "A concise digest."
+    assert paper.affiliations == ["University B", "University A"]
+    assert len(recorded_requests) == 1
 
 
-def test_affiliations_none_without_fulltext(llm_params):
-    client = make_stub_openai_client()
-    paper = make_sample_paper(full_text=None)
-    result = paper.generate_affiliations(client, llm_params)
-    assert result is None
-
-
-def test_affiliations_deduplicates(llm_params):
-    """The stub returns two distinct affiliations, so no dedup needed.
-    But confirm the set() dedup in the code doesn't break anything.
-    """
-    client = make_stub_openai_client()
-    paper = make_sample_paper()
-    result = paper.generate_affiliations(client, llm_params)
-    assert len(result) == len(set(result))
-
-
-def test_affiliations_malformed_llm_output(llm_params):
-    """LLM returns affiliations without JSON brackets. Should fall back gracefully."""
-    from types import SimpleNamespace
-
-    def create_no_brackets(**kwargs):
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="TsingHua University, Peking University"),
-                )
-            ]
-        )
-
-    client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(create=create_no_brackets)
-        )
+@pytest.mark.parametrize("api_mode", ["chat_completion", "response"])
+def test_legacy_executor_sequence_is_a_single_combined_sdk_call(llm_params, api_mode):
+    # Given
+    llm_params["api_mode"] = api_mode
+    client, recorded_requests = _digest_client(
+        json.dumps({"tldr": "Digest.", "affiliations": ["University"]})
     )
     paper = make_sample_paper()
-    result = paper.generate_affiliations(client, llm_params)
-    # re.search for [...] will fail -> AttributeError -> caught -> returns None
-    assert result is None
 
+    # When
+    tldr = paper.generate_tldr(client, llm_params)
+    affiliations = paper.generate_affiliations(client, llm_params)
 
-def test_affiliations_error_returns_none(llm_params):
-    from types import SimpleNamespace
-
-    broken_client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(create=lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
-        )
-    )
-    paper = make_sample_paper()
-    result = paper.generate_affiliations(broken_client, llm_params)
-    assert result is None
-    assert paper.affiliations is None
+    # Then
+    assert tldr == "Digest."
+    assert affiliations == ["University"]
+    assert len(recorded_requests) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +181,60 @@ def test_request_llm_preserves_plain_dict_input_and_token_compatibility(
     }
 
 
+@pytest.mark.parametrize("api_mode", ["chat_completion", "response"])
+def test_request_llm_injects_exact_strict_digest_schema_and_preserves_options(
+    recorder_client, api_mode
+):
+    # Given
+    client, recorded_requests = recorder_client
+    if api_mode == "chat_completion":
+        generation_kwargs = {
+            "model": "MiniMax-M3",
+            "temperature": 0.2,
+            "extra_body": {"routing": {"tags": ["daily"]}},
+            "response_format": {"type": "json_object"},
+        }
+    else:
+        generation_kwargs = {
+            "model": "MiniMax-M3",
+            "max_tokens": 512,
+            "metadata": {"job": "daily"},
+            "reasoning": {"summary": "detailed"},
+            "text": {"verbosity": "low", "format": {"type": "text"}},
+        }
+    llm_params = {
+        "api_mode": api_mode,
+        "thinking": "disabled",
+        "generation_kwargs": generation_kwargs,
+    }
+    original_llm_params = deepcopy(llm_params)
+
+    # When
+    _request_llm(client, llm_params, REQUEST_MESSAGES, structured_output="paper_digest")
+
+    # Then
+    request = recorded_requests[0]
+    if api_mode == "chat_completion":
+        assert request["response_format"] == {
+            "type": "json_schema",
+            "json_schema": EXPECTED_PAPER_DIGEST_CONFIG,
+        }
+        assert request["extra_body"] == {
+            "routing": {"tags": ["daily"]},
+            "thinking": {"type": "disabled"},
+        }
+        assert request["temperature"] == 0.2
+    else:
+        assert request["text"] == {
+            "verbosity": "low",
+            "format": {"type": "json_schema", **EXPECTED_PAPER_DIGEST_CONFIG},
+        }
+        assert request["reasoning"] == {"summary": "detailed", "effort": "none"}
+        assert request["metadata"] == {"job": "daily"}
+        assert request["max_output_tokens"] == 512
+    assert llm_params == original_llm_params
+
+
 # ---------------------------------------------------------------------------
 # _request_llm MiniMax thinking behavior
 # ---------------------------------------------------------------------------
@@ -264,13 +244,11 @@ def test_request_llm_preserves_plain_dict_input_and_token_compatibility(
     "case",
     [
         pytest.param(
-            ("chat_completion", {"model": "MiniMax-M3", "extra_body": {"route": "global"}},
-             "extra_body", {"route": "global", "thinking": {"type": "disabled"}}),
+            ("chat_completion", {"model": "MiniMax-M3", "extra_body": {"route": "global"}}, "extra_body", {"route": "global", "thinking": {"type": "disabled"}}),
             id="chat_completion",
         ),
         pytest.param(
-            ("response", {"model": "MiniMax-M3", "reasoning": {"summary": "detailed"}},
-             "reasoning", {"summary": "detailed", "effort": "none"}),
+            ("response", {"model": "MiniMax-M3", "reasoning": {"summary": "detailed"}}, "reasoning", {"summary": "detailed", "effort": "none"}),
             id="response",
         ),
     ],
