@@ -123,6 +123,7 @@ def test_chemrxiv_convert_to_paper(config):
     retriever = _configure(config)
     raw = SAMPLE_CHEMRXIV_API_RESPONSE["message"]["items"][0]
     paper = retriever.convert_to_paper(raw)
+    assert paper is not None
     assert paper.source == "chemrxiv"
     assert paper.title == "A chemrxiv paper"
     assert paper.authors == ["Jane Smith", "Alan Doe"]
@@ -131,6 +132,9 @@ def test_chemrxiv_convert_to_paper(config):
     assert paper.url == "https://chemrxiv.org/doi/full/10.26434/chemrxiv.15007618/v1"
     assert paper.pdf_url == "https://chemrxiv.org/doi/pdf/10.26434/chemrxiv.15007618/v1"
     assert paper.full_text is None
+    assert paper.doi == "10.26434/chemrxiv.15007618/v1"
+    assert paper.publisher == "American Chemical Society (ACS)"
+    assert paper.is_preprint is True
 
 
 def test_chemrxiv_convert_to_paper_fallbacks(config):

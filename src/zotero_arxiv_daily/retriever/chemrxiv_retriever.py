@@ -8,6 +8,7 @@ import requests
 from loguru import logger
 
 from .base import BaseRetriever, register_retriever
+from ..identifiers import normalize_doi
 from ..protocol import Paper
 
 
@@ -129,7 +130,16 @@ class ChemrxivRetriever(BaseRetriever):
         return f"{author.get('given', '')} {author.get('family', '')}".strip()
 
     def convert_to_paper(self, raw_paper: dict[str, Any]) -> Paper | None:
-        doi = raw_paper["DOI"]
+        doi_value = raw_paper["DOI"]
+        if not isinstance(doi_value, str):
+            return None
+        doi = doi_value
+        publisher_value = raw_paper.get("publisher")
+        publisher = (
+            publisher_value.strip()
+            if isinstance(publisher_value, str) and publisher_value.strip()
+            else None
+        )
         titles = raw_paper.get("title") or []
         title = self._clean_text(titles[0] if titles else "")
         if not title:
@@ -148,4 +158,7 @@ class ChemrxivRetriever(BaseRetriever):
             url=url,
             pdf_url=pdf_url,
             full_text=full_text,
+            doi=normalize_doi(doi),
+            publisher=publisher,
+            is_preprint=True,
         )
