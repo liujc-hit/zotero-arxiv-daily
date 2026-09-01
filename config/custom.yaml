@@ -22,6 +22,9 @@ llm:
 source:
   arxiv:
     category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
+  crossref:
+    mailto: ${oc.env:CROSSREF_MAILTO,null}
+    lookback_days: 1
   openalex:
     api_keys:
       - ${oc.env:OPENALEX_API_KEY,null} # Primary free key; null sends no key.
@@ -29,6 +32,41 @@ source:
     allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}} # Opt-in to anonymous requests; missing resolves to boolean false (fail closed).
     lookback_days: 1
 
+enrichment:
+  enabled: ${oc.decode:${oc.env:ABSTRACT_ENRICHMENT_ENABLED,'false'}}
+  workers: 3
+  max_papers: 50
+  pubmed:
+    enabled: ${oc.decode:${oc.env:PUBMED_ENABLED,'false'}}
+    contact_email: ${oc.env:PUBMED_EMAIL,null}
+    api_key: ${oc.env:NIH_API,null}
+    request_rate: 10.0
+    issns: ${oc.decode:${oc.env:PUBMED_ISSNS,'[]'}}
+  ieee:
+    enabled: ${oc.decode:${oc.env:IEEE_ENABLED,'false'}}
+    api_key: ${oc.env:IEEE_XPLORE_API,null}
+    request_rate: 1.0
+    issns: []
+    doi_prefixes: ["10.1109"]
+  elsevier:
+    enabled: ${oc.decode:${oc.env:ELSEVIER_ENABLED,'false'}}
+    api_key: ${oc.env:ELSEVIER_API,null}
+    request_rate: 9.0
+    issns: []
+    doi_prefixes: ["10.1016"]
+  springer:
+    enabled: ${oc.decode:${oc.env:SPRINGER_ENABLED,'false'}}
+    api_key: ${oc.env:SPRINGER_API,null}
+    request_rate: 1.0
+    issns: []
+    doi_prefixes: ["10.1007","10.1038","10.1057","10.1186"]
+
+reranker:
+  venue_prestige:
+    enabled: ${oc.decode:${oc.env:VENUE_PRESTIGE_ENABLED,'false'}}
+    weight: 0.1
+    max_multiplier: 1.5
+
 executor:
   debug: ${oc.decode:${oc.env:DEBUG,null}}
-  source: ['arxiv','openalex']
+  source: ${oc.decode:${oc.env:PAPER_SOURCES,'["arxiv","openalex"]'}}

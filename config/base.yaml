@@ -14,10 +14,42 @@ source:
     category: null # The categories of target medrxiv papers. Find categories from [here](https://www.medrxiv.org/) Example: ["psychiatry and clinical psychology", "neurology"]
   chemrxiv:
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
+  crossref:
+    mailto: null # Contact email for polite Crossref API access. Required only when the Crossref source or abstract enrichment is enabled. Example: curator@example.com
+    lookback_days: 1 # Number of completed UTC publication days to retrieve, ending yesterday. Example: 3
   openalex:
     api_keys: [] # Ordered list of free OpenAlex API keys; the first usable key is sent and later entries serve as failover. Empty/null entries are skipped. Example: ["your-openalex-api-key","your-backup-openalex-api-key"]
     allow_anonymous: false # Opt-in to keyless anonymous requests when no API key is configured; keep false to avoid OpenAlex rate limits. Example: true
     lookback_days: 1 # Number of completed UTC publication days to retrieve, ending yesterday. Example: 3
+
+enrichment:
+  enabled: false
+  workers: 3
+  max_papers: 50
+  pubmed:
+    enabled: false
+    contact_email: null
+    api_key: null
+    request_rate: 10.0
+    issns: []
+  ieee:
+    enabled: false
+    api_key: null
+    request_rate: 1.0
+    issns: []
+    doi_prefixes: ["10.1109"]
+  elsevier:
+    enabled: false
+    api_key: null
+    request_rate: 9.0
+    issns: []
+    doi_prefixes: ["10.1016"]
+  springer:
+    enabled: false
+    api_key: null
+    request_rate: 1.0
+    issns: []
+    doi_prefixes: ["10.1007","10.1038","10.1057","10.1186"]
 
 email:
   sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
@@ -41,7 +73,11 @@ llm:
 reranker:
   topk: 10 # Score each candidate as the mean of its top-k most similar Zotero papers. Lower = stricter/more focused, higher = smoother/broader. Must be >= 1.
   recency_half_life_days: null # When set, the top-k matched Zotero papers are weighted by exp(-age_days/half_life) so recently added papers (your current direction) dominate the score. null disables weighting. Example: 180
-  mmr_lambda: null # When set (e.g. 0.7), reorders the top candidates by Maximal Marginal Relevance so near-duplicate papers do not fill consecutive email slots. Adds one extra embedding pass over the candidates. null keeps pure score order. Example: 0.7
+  mmr_lambda: null # When set (e.g. 0.7), reorders the top candidates by Maximal Marginal Relevance so near-duplicate papers do not fill consecutive email slots. MMR reuses the candidate embeddings and does not add a duplicate model/embedding pass. null keeps pure score order. Example: 0.7
+  venue_prestige:
+    enabled: false
+    weight: 0.1
+    max_multiplier: 1.5
   local:
     model: jinaai/jina-embeddings-v5-text-nano-retrieval # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
     encode_kwargs:
