@@ -105,6 +105,20 @@ def test_render_email_only_pinned_no_recommendations_header():
     assert "Solo Pinned" in html
 
 
+def test_render_email_pdf_url_none_uses_landing_url():
+    paper = make_sample_paper(pdf_url=None, score=7.0, tldr="ok")
+    html = render_email([paper])
+    assert 'href="https://arxiv.org/abs/2026.00001"' in html
+    assert 'href="None"' not in html
+
+
+def test_render_email_pdf_url_present_renders_pdf_link():
+    paper = make_sample_paper(score=7.0, tldr="ok")
+    html = render_email([paper])
+    assert 'href="https://arxiv.org/pdf/2026.00001"' in html
+    assert 'href="None"' not in html
+
+
 def test_get_block_html_pinned_flag_adds_badge():
     plain = get_block_html("T", "A", "1.0", "s", "http://x", "MIT", pinned=False)
     pinned = get_block_html("T", "A", "1.0", "s", "http://x", "MIT", pinned=True)

@@ -55,7 +55,15 @@ def get_empty_html():
   """
   return block_template
 
-def get_block_html(title:str, authors:str, rate:str, tldr:str, pdf_url:str, affiliations:str=None, pinned:bool=False):
+def get_block_html(
+    title: str,
+    authors: str,
+    rate: str | float,
+    tldr: str | None,
+    pdf_url: str,
+    affiliations: str | None = None,
+    pinned: bool = False,
+) -> str:
     badge = _PIN_BADGE if pinned else ''
     block_template = """
     <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif; border: 1px solid #ddd; border-radius: 8px; padding: 16px; background-color: #f9f9f9;">
@@ -123,7 +131,7 @@ def _render_paper_block(p:Paper, pinned:bool=False) -> str:
             affiliations += ', ...'
     else:
         affiliations = 'Unknown Affiliation'
-    return get_block_html(p.title, authors, rate, p.tldr, p.pdf_url, affiliations, pinned=pinned)
+    return get_block_html(p.title, authors, rate, p.tldr, p.pdf_url or p.url, affiliations, pinned=pinned)
 
 
 def render_email(papers:list[Paper]) -> str:
