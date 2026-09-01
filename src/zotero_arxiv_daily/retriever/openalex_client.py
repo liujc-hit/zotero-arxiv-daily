@@ -10,6 +10,21 @@ from typing import ClassVar, Final, Protocol, override
 
 import requests
 
+from .openalex_errors import (
+    MissingOpenAlexCredentialsError,
+    OpenAlexClientError,
+    OpenAlexCredentialConfigurationError,
+    OpenAlexCredentialsExhaustedError,
+    OpenAlexHttpStatusError,
+    OpenAlexInvalidJsonError,
+    OpenAlexServerError,
+    OpenAlexSourcesHttpStatusError,
+    OpenAlexSourcesInvalidJsonError,
+    OpenAlexSourcesTransportError,
+    OpenAlexTransportError,
+    OpenAlexUnsafeQueryParameterError,
+)
+
 type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
 type JsonObject = dict[str, JsonValue]
 type QueryValue = str | int
@@ -29,69 +44,6 @@ class _HttpResponse(Protocol):
     def headers(self) -> Mapping[str, str]: ...
 
     def json(self) -> JsonValue: ...
-
-
-class OpenAlexClientError(RuntimeError):
-    """Base class for redacted OpenAlex client failures."""
-
-
-class _StaticOpenAlexError(OpenAlexClientError):
-    message: ClassVar[str]
-
-    def __init__(self) -> None:
-        super().__init__(self.message)
-
-
-class MissingOpenAlexCredentialsError(_StaticOpenAlexError):
-    """Raised when neither keyed nor anonymous access was configured."""
-
-    message: ClassVar[str] = "OpenAlex client has no configured request identity"
-
-
-class OpenAlexCredentialsExhaustedError(_StaticOpenAlexError):
-    """Raised after every configured request identity has been rate limited."""
-
-    message: ClassVar[str] = "OpenAlex request identities are exhausted"
-
-
-class OpenAlexCredentialConfigurationError(_StaticOpenAlexError):
-    """Raised when configured OpenAlex keys are excessive or duplicated."""
-
-    message: ClassVar[str] = "OpenAlex requires at most two distinct credentials"
-
-
-class OpenAlexTransportError(_StaticOpenAlexError):
-    """Raised when all transport attempts fail."""
-
-    message: ClassVar[str] = "OpenAlex transport failed after three total attempts"
-
-
-class OpenAlexServerError(_StaticOpenAlexError):
-    """Raised when all attempts receive a server error."""
-
-    message: ClassVar[str] = "OpenAlex server failed after three total attempts"
-
-
-class OpenAlexInvalidJsonError(_StaticOpenAlexError):
-    """Raised when a successful response does not contain JSON."""
-
-    message: ClassVar[str] = "OpenAlex returned invalid JSON"
-
-
-class OpenAlexUnsafeQueryParameterError(_StaticOpenAlexError):
-    """Raised when a caller attempts query-string credential transport."""
-
-    message: ClassVar[str] = "OpenAlex credentials are forbidden in query parameters"
-
-
-class OpenAlexHttpStatusError(OpenAlexClientError):
-    """Represent a non-retryable HTTP status without retaining a response."""
-
-    status_code: int
-
-    def __init__(self, status_code: int) -> None:
-        self.status_code = status_code
-        super().__init__(f"OpenAlex returned HTTP status {status_code}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +97,7 @@ class OpenAlexClient:
     """Fetch OpenAlex JSON without exposing or reusing exhausted credentials."""
 
     api_url: ClassVar[str] = "https://api.openalex.org/works"
+    sources_api_url: ClassVar[str] = "https://api.openalex.org/sources"
     max_attempts: ClassVar[int] = 3
     retry_delay_seconds: ClassVar[float] = 1.0
     request_timeout_seconds: ClassVar[float] = 60.0
@@ -223,10 +176,12 @@ class OpenAlexClient:
         self,
         params: Mapping[str, QueryValue],
         headers: Mapping[str, str],
+        *,
+        sources: bool = False,
     ) -> _HttpResponse | None:
         try:
             return requests.get(
-                self.api_url,
+                self.sources_api_url if sources else self.api_url,
                 params=params,
                 headers=headers,
                 timeout=self.request_timeout_seconds,
@@ -234,6 +189,36 @@ class OpenAlexClient:
             )
         except requests.RequestException:
             return None
+
+    def get_sources_json(self, params: Mapping[str, QueryValue]) -> JsonValue:
+        """Return one no-retry payload from the fixed OpenAlex Sources endpoint."""
+        request_params = dict(params)
+        if any(name.casefold() == "api_key" for name in request_params):
+            raise OpenAlexUnsafeQueryParameterError from None
+
+        while True:
+            identity_index, identity = self._current_identity()
+            headers = dict(self.request_headers)
+            if identity.api_key is not None:
+                headers["Authorization"] = f"Bearer {identity.api_key}"
+            if not self._reserve_attempt(identity_index):
+                continue
+
+            response = self._send(request_params, headers, sources=True)
+            if response is None:
+                raise OpenAlexSourcesTransportError from None
+            status_code = response.status_code
+            if status_code == HTTP_TOO_MANY_REQUESTS:
+                self._advance_identity(identity_index)
+            if status_code >= HTTP_MULTIPLE_CHOICES:
+                del response
+                raise OpenAlexSourcesHttpStatusError(status_code) from None
+            if response.headers.get("X-RateLimit-Remaining", "").strip() == "0":
+                self._advance_identity(identity_index)
+            try:
+                return response.json()
+            except requests.JSONDecodeError:
+                raise OpenAlexSourcesInvalidJsonError from None
 
     def get_json(self, params: Mapping[str, QueryValue]) -> JsonValue:
         """Return one OpenAlex JSON payload using monotonic identity failover."""
@@ -292,6 +277,9 @@ __all__: Final[tuple[str, ...]] = (
     "OpenAlexCredentialsExhaustedError",
     "OpenAlexHttpStatusError",
     "OpenAlexInvalidJsonError",
+    "OpenAlexSourcesHttpStatusError",
+    "OpenAlexSourcesInvalidJsonError",
+    "OpenAlexSourcesTransportError",
     "OpenAlexServerError",
     "OpenAlexTransportError",
     "OpenAlexUnsafeQueryParameterError",
