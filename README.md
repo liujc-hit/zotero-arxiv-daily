@@ -8,247 +8,226 @@
 <div align="center">
 
   [![Status](https://img.shields.io/badge/status-active-success.svg)]()
-  ![Stars](https://img.shields.io/github/stars/TideDra/zotero-arxiv-daily?style=flat)
-  [![GitHub Issues](https://img.shields.io/github/issues/TideDra/zotero-arxiv-daily)](https://github.com/TideDra/zotero-arxiv-daily/issues)
-  [![GitHub Pull Requests](https://img.shields.io/github/issues-pr/TideDra/zotero-arxiv-daily)](https://github.com/TideDra/zotero-arxiv-daily/pulls)
-  [![License](https://img.shields.io/github/license/TideDra/zotero-arxiv-daily)](/LICENSE)
+  ![Stars](https://img.shields.io/github/stars/liujc-hit/zotero-arxiv-daily?style=flat)
+  [![GitHub Issues](https://img.shields.io/github/issues/liujc-hit/zotero-arxiv-daily)](https://github.com/liujc-hit/zotero-arxiv-daily/issues)
+  [![GitHub Pull Requests](https://img.shields.io/github/issues-pr/liujc-hit/zotero-arxiv-daily)](https://github.com/liujc-hit/zotero-arxiv-daily/pulls)
+  [![License](https://img.shields.io/github/license/liujc-hit/zotero-arxiv-daily)](/LICENSE)
   [<img src="https://api.gitsponsors.com/api/badge/img?id=893025857" height="20">](https://api.gitsponsors.com/api/badge/link?p=PKMtRut1dWWuC1oFdJweyDSvJg454/GkdIx4IinvBblaX2AY4rQ7FYKAK1ZjApoiNhYEeduIEhfeZVIwoIVlvcwdJXVFD2nV2EE5j6lYXaT/RHrcsQbFl3aKe1F3hliP26OMayXOoZVDidl05wj+yg==)
 
 </div>
 
 ---
 
-<p align="center"> Recommend new arxiv papers of your interest daily according to your Zotero library.
+<p align="center"> Daily arxiv/biorxiv/medrxiv/chemrxiv/OpenAlex paper recommendations based on your Zotero library, delivered by email.
     <br> 
 </p>
 
 > [!IMPORTANT]
-> Please keep an eye on this repo, and merge your forked repo in time when there is any update of this upstream, in order to enjoy new features and fix found bugs.
+> This project is under active development. Watch the repo and sync your fork with upstream regularly so you get fixes and new features.
 
-## 🧐 About <a name = "about"></a>
+## 🧐 About & Features
 
-> Track new scientific researches of your interest by just forking (and staring) this repo!😊
+*Zotero-arXiv-Daily* ranks each day's new papers against your Zotero library and emails you the most relevant ones. Deployed as a GitHub Actions workflow it costs nothing (public repos), needs no server, and needs only a handful of repository settings.
 
-*Zotero-arXiv-Daily* finds arxiv papers that may attract you based on the context of your Zotero library, and then sends the result to your mailbox📮. It can be deployed as Github Action Workflow with **zero cost**, **no installation**, and **few configuration** of Github Action environment variables for daily **automatic** delivery.
-
-## ✨ Features
-- Totally free! All the calculation can be done in the Github Action runner locally within its quota (for public repo).
-- AI-generated TL;DR for you to quickly pick up target papers.
-- Affiliations of the paper are resolved and presented.
-- Links of PDF and code implementation (if any) presented in the e-mail.
-- List of papers sorted by relevance with your recent research interest.
-- 📌 Manually pin papers by keywords: papers whose title or abstract match your keywords are force-pinned to the top of the email, on top of the recommendation algorithm.
-- Fast deployment via fork this repo and set environment variables in the Github Action Page.
-- Support LLM API for generating TL;DR of papers.
-- Ignore unwanted Zotero papers using a list of glob patterns.
-- Support multiple sources of papers to retrieve:
-  - arxiv
-  - biorxiv
-  - medrxiv
-  - chemrxiv
-  - openalex, which retrieves new papers from a built-in robotics/mechatronics journal expansion plus a fixed default robotics conference set, matched by exact OpenAlex identifiers. No optional conference expansion is included.
+- Free daily delivery, no installation, fully automated.
+- Papers sorted by relevance to your recent reading.
+- Multiple retrieval sources: `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, and `openalex` (a built-in robotics/mechatronics venue catalog).
+- AI-generated TL;DR and resolved author affiliations for every paper in the email.
+- Links to PDF and code implementation (when available) in the email.
+- Keyword pinning force-matches topics you care about to the top of the email.
+- Curate which Zotero collections drive recommendations using glob patterns.
 
 ## 📷 Screenshot
+
 ![screenshot](./assets/screenshot.png)
 
-## 🚀 Usage
-### Quick Start
-1. Fork (and star😘) this repo.
-![fork](./assets/fork.png)
+## 🚀 Quick Setup
 
-2. Set Github Action environment variables.
-![secrets](./assets/secrets.png)
+1. Fork (and star 😘) this repo.
+   ![fork](./assets/fork.png)
 
-Below are all the secrets you need to set. They are invisible to anyone including you once they are set, for security.
+2. Add the repository **Secrets** (Settings → Secrets and variables → Actions → Secrets). Secrets store credentials; they are masked in logs and hidden for good once saved.
+   ![secrets](./assets/secrets.png)
 
-| Key |Description | Example |
-| :---  | :---  | :--- |
-| ZOTERO_ID  | User ID of your Zotero account. **User ID is not your username, but a sequence of numbers**Get your ID from [here](https://www.zotero.org/settings/security). You can find it at the position shown in this [screenshot](https://github.com/TideDra/zotero-arxiv-daily/blob/main/assets/userid.png). | 12345678  |
-| ZOTERO_KEY | An Zotero API key with read access. Get a key from [here](https://www.zotero.org/settings/security).  | AB5tZ877P2j7Sm2Mragq041H   |
-| SENDER | The email account of the SMTP server that sends you email. | abc@qq.com |
-| SENDER_PASSWORD | The password of the sender account. Note that it's not necessarily the password for logging in the e-mail client, but the authentication code for SMTP service. Ask your email provider for this.   | abcdefghijklmn |
-| RECEIVER | The e-mail address that receives the paper list. | abc@outlook.com |
-| OPENAI_API_KEY | API Key when using the API to access LLMs. You can get FREE API for using advanced open source LLMs in [SiliconFlow](https://cloud.siliconflow.cn/i/b3XhBRAm). | sk-xxx |
-| OPENAI_API_BASE | API URL when using the API to access LLMs. | https://api.siliconflow.cn/v1 |
-| OPENALEX_API_KEY | Optional. GitHub Actions **Secret** holding your primary free OpenAlex API key for a higher rate limit. The value is the raw key only: the code itself sends it as an `Authorization: Bearer` header, so do not include a `Bearer ` prefix in the Secret. | your-openalex-api-key |
-| OPENALEX_API_KEY_2 | Optional. GitHub Actions **Secret** holding a standby OpenAlex API key. It is tried only after the primary key gets rate limited. Leave it unset if you have just one key. | your-backup-openalex-api-key |
+   | Key | Required | Description | Example |
+   | :--- | :--- | :--- | :--- |
+   | ZOTERO_ID | Yes | Numeric user ID of your Zotero account (not your username). Get it from [security settings](https://www.zotero.org/settings/security), see this [screenshot](https://github.com/liujc-hit/zotero-arxiv-daily/blob/main/assets/userid.png). | 12345678 |
+   | ZOTERO_KEY | Yes | Zotero API key with read access, from the same page. | AB5tZ877P2j7Sm2Mragq041H |
+   | SENDER | Yes | Email account of the SMTP server that sends the mail. | abc@qq.com |
+   | SENDER_PASSWORD | Yes | SMTP authentication code for the sender (often not your login password; ask your provider). | abcdefghijklmn |
+   | RECEIVER | Yes | Address that receives the paper list. | abc@outlook.com |
+   | OPENAI_API_KEY | Yes | API key for the LLM that writes the TL;DRs. Free open-model APIs available at [SiliconFlow](https://cloud.siliconflow.cn/i/b3XhBRAm). | sk-xxx |
+   | OPENAI_API_BASE | Yes | Base URL of the LLM API. | https://api.siliconflow.cn/v1 |
+   | OPENALEX_API_KEY | No | Primary OpenAlex API key for a higher rate limit. Raw key only; the client adds the `Bearer` prefix itself. | your-openalex-api-key |
+   | OPENALEX_API_KEY_2 | No | Standby OpenAlex key, used only after the primary is rate limited. Leave unset if you have one key. | your-backup-key |
 
-OpenAlex anonymous (keyless) access is opt-in only, and it is controlled by a GitHub Actions repository **Variable** instead of a Secret:
+3. Add the repository **Variables** (same settings page, Variables tab). Variables are plain non-secret values, readable in the UI, which is why the config you paste below must only *reference* Secrets via `${oc.env:...}`, never contain them.
+   ![vars](./assets/repo_var.png)
 
-| Variable |Description | Example |
-| :---  | :---  | :--- |
-| OPENALEX_ALLOW_ANONYMOUS | Whether OpenAlex may fall back to keyless requests from the shared anonymous pool when no configured API key is usable. Absent, `false`, or any other value means no keyless access at all. Anonymous access is never implicit; only an explicit `true` turns it on. | true |
+   | Variable | Required | Description | Example |
+   | :--- | :--- | :--- | :--- |
+   | CUSTOM_CONFIG | Yes | YAML configuration overlay, written to `config/custom.yaml` at run time. | see below |
+   | OPENALEX_ALLOW_ANONYMOUS | No | Only an explicit `true` lets OpenAlex fall back to keyless anonymous requests when no configured key is usable. Anything else (including unset) fails closed. | true |
 
-Then you should also set a public variable `CUSTOM_CONFIG` for your custom configuration.
-![vars](./assets/repo_var.png)
-![custom_config](./assets/config_var.png)
-Paste the following content into the value of `CUSTOM_CONFIG` variable:
-```yaml
-zotero:
-  user_id: ${oc.env:ZOTERO_ID}
-  api_key: ${oc.env:ZOTERO_KEY}
-  include_path: null # Or e.g. ["2026/survey/**", "2026/reading-group/**"]
+4. Paste this compact, deployable configuration into the value of `CUSTOM_CONFIG`:
+   ![custom_config](./assets/config_var.png)
 
-email:
-  sender: ${oc.env:SENDER}
-  receiver: ${oc.env:RECEIVER}
-  smtp_server: smtp.qq.com
-  smtp_port: 465
-  sender_password: ${oc.env:SENDER_PASSWORD}
+   ```yaml
+   zotero:
+     user_id: ${oc.env:ZOTERO_ID}
+     api_key: ${oc.env:ZOTERO_KEY}
+     include_path: null  # Or glob patterns, e.g. ["2026/survey/**", "2026/reading-group/**"]
 
-llm:
-  api:
-    key: ${oc.env:OPENAI_API_KEY}
-    base_url: ${oc.env:OPENAI_API_BASE}
-  api_mode: chat_completion # Or response to use the Responses API.
-  thinking: disabled # MiniMax-M3 only; MiniMax-M2-family models cannot disable thinking and must use null.
-  generation_kwargs:
-    model: MiniMax-M3
+   email:
+     sender: ${oc.env:SENDER}
+     receiver: ${oc.env:RECEIVER}
+     smtp_server: smtp.qq.com
+     smtp_port: 465
+     sender_password: ${oc.env:SENDER_PASSWORD}
 
-source:
-  arxiv:
-    category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
-    include_cross_list: false # Set to true to include arXiv cross-list papers in these categories.
-  openalex:
-    api_keys: # Ordered keys from GitHub Actions Secrets; at most two distinct keys, empty entries are skipped.
-      - ${oc.env:OPENALEX_API_KEY,null} # Primary raw key, no 'Bearer ' prefix; null sends no key.
-      - ${oc.env:OPENALEX_API_KEY_2,null} # Optional standby raw key, tried after the primary is exhausted.
-    allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}} # Repository Variable; only explicit 'true' enables keyless access, anything else fails closed.
-    lookback_days: 1 # Number of completed UTC publication days to retrieve, ending yesterday.
+   llm:
+     api:
+       key: ${oc.env:OPENAI_API_KEY}
+       base_url: ${oc.env:OPENAI_API_BASE}
+     api_mode: chat_completion  # Or "response" for the Responses API.
+     thinking: disabled  # MiniMax-M3 only; MiniMax-M2-family models must use null.
+     generation_kwargs:
+       model: MiniMax-M3
 
-executor:
-  debug: ${oc.decode:${oc.env:DEBUG,null}}
-  source: ['arxiv','openalex']
-  pin_keywords: null # Optional. e.g. ["Mamba","world model"] force-pins matching papers to the top of the email.
-```
-Set `source.arxiv.include_cross_list: true` if you want cross-listed papers included.
-Set `executor.pin_keywords` to a list of keywords (matched against title or abstract, case-insensitive) to always surface papers about those topics at the top of the email, regardless of their similarity score.
->[!NOTE]
-> `${oc.env:XXX,yyy}` means the value of the environment variable `XXX`. If the variable is not set, the default value `yyy` will be used.
+   source:
+     arxiv:
+       category: ["cs.AI", "cs.CV", "cs.LG", "cs.CL"]
+       include_cross_list: false  # true also includes arXiv cross-list papers.
+     openalex:
+       api_keys:  # Raw keys from Secrets; null entries are skipped, at most two distinct keys.
+         - ${oc.env:OPENALEX_API_KEY,null}
+         - ${oc.env:OPENALEX_API_KEY_2,null}
+       allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}}
+       lookback_days: 1  # Completed UTC publication days to retrieve, ending yesterday.
+
+   executor:
+     debug: ${oc.decode:${oc.env:DEBUG,null}}
+     source: ['arxiv', 'openalex']
+     pin_keywords: null  # Or e.g. ["Mamba", "world model"] to force-pin matching papers.
+   ```
+
+5. Manually trigger the **Test** workflow to verify everything, then check its log and the receiver inbox.
+   ![test](./assets/test.png)
 
 >[!NOTE]
-> MiniMax thinking: `llm.thinking: disabled` is translated to `extra_body.thinking.type=disabled` in Chat Completions mode and `reasoning.effort=none` in Responses mode, and only for the exact model `MiniMax-M3`. MiniMax-M2, M2.1, M2.1-highspeed, M2.5, M2.5-highspeed, M2.7, and M2.7-highspeed cannot disable thinking and must use `thinking: null`.
+> `${oc.env:XXX,yyy}` resolves to the value of environment variable `XXX`, falling back to `yyy` when unset. `${oc.decode:...}` additionally parses the result as YAML, so `'false'` becomes a boolean.
+
+## 🔧 Configuration & Customization
+
+The example above is intentionally compact but complete for daily use. Configuration is composed with Hydra/OmegaConf from `config/base.yaml` (defaults and full reference, every key commented) plus your `config/custom.yaml` overlay. Common extra knobs:
+
+| Key | Effect |
+| :--- | :--- |
+| `zotero.ignore_path` | Glob patterns of Zotero collections to exclude from the corpus. |
+| `source.biorxiv.category` / `source.medrxiv.category` | Category filters for those sources. |
+| `source.chemrxiv.include_new_versions` | Also include revised versions of existing chemrxiv preprints. |
+| `llm.language` | Language of the generated TL;DRs (default English). |
+| `reranker.topk` | Top-k aggregation size for scoring, default 10. Lower is stricter, higher is smoother. |
+| `reranker.recency_half_life_days` | Recency weighting of top-k matches, null disables. |
+| `reranker.mmr_lambda` | MMR diversification of the top slots, null disables. |
+| `executor.reranker` | Embedding backend: `local` (sentence-transformers) or `api` (OpenAI-compatible endpoint; set `reranker.api.*`). |
+| `executor.min_score` | Drop papers scoring below this floor (0-10 scale). |
+| `executor.max_paper_num` | Cap on recommended papers per email (pinned papers don't count against it). |
+| `executor.pin_keywords` / `executor.max_pinned_num` | Keyword pinning and its cap. |
+| `executor.send_empty` | Send an email even when nothing survived filtering. |
+| `executor.enrich_workers` | Parallel workers for full-text fetching plus TL;DR/affiliation generation. |
 
 >[!NOTE]
-> OpenAlex source: it is activated only by including `openalex` in `executor.source`. It retrieves new papers from the built-in exact robotics/mechatronics venue catalog (a journal expansion plus a fixed conference set, matched by exact OpenAlex identifiers), so `api_keys`, `allow_anonymous`, and `lookback_days` are the only settings.
+> MiniMax thinking: `llm.thinking: disabled` maps to `extra_body.thinking.type=disabled` in Chat Completions mode and `reasoning.effort=none` in Responses mode, and only for the exact model `MiniMax-M3`. MiniMax-M2-family models (M2, M2.1, M2.5, M2.7 and their highspeed variants) cannot disable thinking and must use `thinking: null`.
 
->[!NOTE]
-> OpenAlex keys and failover: each Secret value holds the raw key only, and the client itself sends `Authorization: Bearer <key>`. Any 429 response permanently advances from the primary key to the standby key, and a successful response whose `X-RateLimit-Remaining` header is `0` also advances, starting with the next request. Network errors and 5xx responses are retried (up to three attempts) without rotating keys. After both keys are exhausted, the run fails closed unless `OPENALEX_ALLOW_ANONYMOUS` is explicitly `true`, in which case keyless requests are the last resort. The client also enforces its own cap of at most 100 request starts per second, no matter how many keys are configured.
+### OpenAlex source
 
-Here is the full configuration, `???` means the value must be filled in:
-```yaml
-zotero:
-  user_id: ??? # User ID of your Zotero account.
-  api_key: ??? # An Zotero API key with read access.
-  include_path: null # A list of glob patterns marking the Zotero collections that should be included. Example: ["2026/survey/**", "2026/reading-group/**"]
+The `openalex` source is activated purely by listing `openalex` in `executor.source`. It retrieves papers from a built-in, exact venue catalog (a robotics/mechatronics journal expansion plus a fixed default robotics conference set, matched by exact OpenAlex source IDs and ISSNs), so its only settings are `api_keys`, `allow_anonymous`, and `lookback_days`.
 
-source:
-  arxiv:
-    category: null # The categories of target arxiv papers. Find the abbr of your research area from [here](https://arxiv.org/category_taxonomy). Example: ["cs.AI","cs.CV","cs.LG","cs.CL"]
-    include_cross_list: false # Whether to include arXiv cross-list papers in subscribed categories. Example: true
-  biorxiv:
-    category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
-  medrxiv:
-    category: null # The categories of target medrxiv papers. Find categories from [here](https://www.medrxiv.org/) Example: ["psychiatry and clinical psychology", "neurology"]
-  chemrxiv:
-    include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
-  openalex:
-    api_keys: [] # Ordered list of at most two distinct free OpenAlex API keys; the first usable key is sent and later entries serve as failover. Empty/null entries are skipped. Example: ["your-openalex-api-key","your-backup-openalex-api-key"]
-    allow_anonymous: false # Opt-in to keyless anonymous requests from the shared pool when no API key is usable. Keep false to fail closed. Example: true
-    lookback_days: 1 # Number of completed UTC publication days to retrieve, ending yesterday. Example: 3
+Client behavior, implemented in `src/zotero_arxiv_daily/retriever/openalex_client.py`:
 
-email:
-  sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
-  receiver: ??? # The email account that receives the paper list. Example: abc@outlook.com
-  smtp_server: ??? # The SMTP server that sends the email. Ask your email provider (Gmail, QQ, Outlook, ...) for its SMTP server. Example: smtp.qq.com
-  smtp_port: ??? # The port of SMTP server. Example: 465
-  sender_password: ??? # The password of the sender account. Note that it's not necessarily the password for logging in the e-mail client, but the authentication code for SMTP service. Ask your email provider for this. Example: abcdefghijklmn
+- Keys are sent as `Authorization: Bearer <key>` headers; store the raw key in each Secret without a `Bearer ` prefix. At most two distinct keys are accepted.
+- Failover: an HTTP 429 immediately and permanently advances to the next identity (key). A successful response whose `X-RateLimit-Remaining` header is `0` also advances, starting with the next request.
+- Transport errors and 5xx responses are retried up to three total attempts on the same identity, without rotating keys.
+- Once every identity is exhausted, the run fails closed unless anonymous fallback is explicitly enabled (`OPENALEX_ALLOW_ANONYMOUS=true` / `allow_anonymous: true`), in which case keyless requests from the shared pool are the last resort.
+- A client-side sliding-window limiter caps the client at 100 request starts per second, regardless of how many keys are configured.
 
-llm:
-  api:
-    key: ??? # API Key of your LLM API. Example: sk-xxx
-    base_url: ??? # API URL of your LLM API. Example: https://api.openai.com/v1
-  api_mode: chat_completion # The LLM API to use. Options: chat_completion or response.
-  thinking: null # Set to 'disabled' to turn off thinking. Only maps to provider fields for the exact model 'MiniMax-M3'; MiniMax-M2-family models cannot disable thinking and must keep this null.
-  generation_kwargs:
-  # Arguments for the selected LLM API.
-    max_tokens: 16384
-    model: ???
-  language: English # Preferred language for the TL;DR. Example: English
+## ⚙️ GitHub Actions Deployment
 
-reranker:
-  topk: 10 # Score each candidate as the mean of its top-k most similar Zotero papers. Lower = stricter/more focused, higher = smoother/broader. Example: 10
-  local:
-    model: jinaai/jina-embeddings-v5-text-nano # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
-    encode_kwargs:
-    # The kwargs for the encode method of the local embedding model. Details see [here](https://www.sbert.net/docs/package_reference/SentenceTransformer.html#sentence_transformers.SentenceTransformer.encode)
-      task: retrieval
-      prompt_name: document
-  api:
-    key: null # API Key of your embedding model API. Example: sk-xxx
-    base_url: null # API URL of your embedding model API. Example: https://api.openai.com/v1
-    model: null # The model name of the embedding model. Example: text-embedding-3-large
-    batch_size: null # The batch size for embedding API requests. Adjust to match your provider's limit. Example: 64
+The main workflow (`.github/workflows/main.yml`, "Send emails daily") runs every day at **04:27 `Asia/Shanghai` (UTC+8)**, which is 20:27 UTC on the previous day. Edit the `schedule` block in that file to change the time. The workflow checks out code with a plain `actions/checkout` step (no `repository` or `ref` overrides), so both scheduled and manual runs always execute the workflow file and the code from the latest commit of the current repository's default branch. Any change to the schedule or the workflow must therefore be merged into that default branch before it takes effect. Scheduled runs may also be delayed when GitHub is under heavy load, and scheduled workflows only fire in your fork if Actions is enabled there.
 
-executor:
-  debug: false # Whether to use debug mode. Example: true
-  send_empty: false # Whether to send an empty email even if no new papers today. Example: true
-  max_paper_num: 100 # The maximum number of the papers presented in the email. Example: 100
-  pin_keywords: null # List of keywords to force-pin to the TOP of the email, on top of the recommendation algorithm. A paper whose title OR abstract contains any keyword (case-insensitive) is pinned. Pinned papers do NOT count against max_paper_num. Example: ["Mamba","state space model"]
-  max_pinned_num: 20 # Upper bound on pinned papers per email. Matches beyond this cap fall back to the normal recommendation pool. Example: 20
-  enrich_workers: 8 # Number of parallel workers for fetching full text + generating TL;DR/affiliations for the final top-N papers. Raise for faster enrichment, lower if your LLM/embedding provider rate-limits you. Example: 8
-  source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv','openalex']
-  reranker: local # The reranker to use. Example: 'local' or 'api'
-```
+You can also trigger "Send emails daily" manually at any time via `workflow_dispatch`. The **Test** workflow is the same pipeline with `DEBUG=true` forced, useful for validating settings; it never runs on a schedule.
 
-That's all! Now you can test the workflow by manually triggering it:
-![test](./assets/test.png)
+## 💻 Local Usage
 
-> [!NOTE]
-> The Test-Workflow Action is the debug version of the main workflow (Send-emails-daily), which always retrieve 5 arxiv papers regardless of the date. While the main workflow will be automatically triggered everyday and retrieve new papers released yesterday. There is no new arxiv paper at weekends and holiday, in which case you may see "No new papers found" in the log of main workflow.
+With [uv](https://github.com/astral-sh/uv) installed:
 
-Then check the log and the receiver email after it finishes.
-
-By default, the main workflow runs on 22:00 UTC everyday. You can change this time by editting the workflow config `.github/workflows/main.yml`.
-
-### Local Running
-Supported by [uv](https://github.com/astral-sh/uv), this workflow can easily run on your local device if uv is installed:
 ```bash
-# set all the environment variables
-# export ZOTERO_ID=xxxx
-# ...
+git clone https://github.com/liujc-hit/zotero-arxiv-daily.git
 cd zotero-arxiv-daily
-uv run main.py
+
+# Export the same environment variables the workflow sets:
+# export ZOTERO_ID=xxxx ZOTERO_KEY=xxxx SENDER=xxxx RECEIVER=xxxx
+# export SENDER_PASSWORD=xxxx OPENAI_API_KEY=xxxx OPENAI_API_BASE=xxxx
+
+uv run src/zotero_arxiv_daily/main.py
 ```
 
-## 🚀 Sync with the latest version
-This project is in active development. You can subscribe this repo via `Watch` so that you can be notified once we publish new release.
+Locally the overlay is read from `config/custom.yaml`; write it with the same content you would paste into `CUSTOM_CONFIG`.
 
-![Watch](./assets/subscribe_release.png)
+## 📖 How It Works
 
+Each run is a linear pipeline (`src/zotero_arxiv_daily/executor.py`):
 
-## 📖 How it works
-*Zotero-arXiv-Daily* firstly retrieves all the papers in your Zotero library and all the papers released in the previous day, via corresponding API. Then it calculates the embedding of each paper's **title + abstract** via an embedding model. The score of a candidate paper is the **mean of its top-k highest similarities** to your Zotero papers (`reranker.topk`, default 10), rather than an average over the whole library — this keeps the score driven by the corpus a paper actually aligns with and avoids diluting it with unrelated papers. Optional `reranker.recency_half_life_days` weights those top-k matches by recency so your current research direction dominates. Papers scoring below `executor.min_score` are dropped (pinned papers bypass the floor), and `reranker.mmr_lambda` optionally reorders the top candidates by Maximal Marginal Relevance so near-duplicates do not fill consecutive slots. Papers matching `executor.pin_keywords` are additionally force-pinned to the top of the email. The TLDR of each paper is generated by LLM; full text is fetched lazily (only for the papers that make it into the email) and parsed by pymupdf4llm.
+1. **Fetch Zotero corpus**: all library items of type conferencePaper / journalArticle / preprint that have an abstract.
+2. **Filter corpus**: keep or exclude collections via `zotero.include_path` / `zotero.ignore_path` glob patterns.
+3. **Retrieve new papers**: from every source listed in `executor.source` (published yesterday, or `lookback_days` for OpenAlex).
+4. **Rerank**: embed the **title + abstract** of every candidate and corpus paper, then score, sort, and optionally diversify candidates (details below).
+5. **Keyword pinning**: papers whose title or abstract contains any `executor.pin_keywords` entry (case-insensitive) are split out and pinned; the pinned section is capped at `executor.max_pinned_num`, overflow returns to the ranked pool.
+6. **Relevance floor**: papers scoring below `executor.min_score` are dropped from the ranked pool (pinned papers bypass the floor).
+7. **Top-N cut**: the ranked pool is truncated to `executor.max_paper_num`.
+8. **Lazy enrichment**: only for the final list (pinned + top-N), full text is fetched on demand where missing, then TL;DR and affiliations are generated concurrently (`executor.enrich_workers` threads) through the configured LLM API.
+9. **Render and send**: the HTML email is rendered and sent via SMTP.
+
+If nothing survives steps 3-7 and `executor.send_empty` is false, no email is sent.
+
+## 🧮 Recommendation Algorithm
+
+Embedding similarity does the ranking. Each candidate is scored by the **mean of its top-k highest similarities** to the corpus (`reranker.topk`, default 10), where similarity is computed between title+abstract embeddings. Averaging only the best k matches keeps a paper's score driven by the slice of your library it actually aligns with, instead of diluting it across everything you have ever saved. Scores are scaled to a **0-10 range**.
+
+Three optional refinements:
+
+- **Recency weighting** (`reranker.recency_half_life_days`): the top-k matches are weighted by `exp(-age / half_life)` based on when each paper was added to Zotero, so your current direction dominates. `null` (default) disables it.
+- **MMR diversification** (`reranker.mmr_lambda`): reorders the leading candidates by Maximal Marginal Relevance so near-duplicates don't fill consecutive email slots. Ordering only; scores are untouched. `null` (default) keeps pure score order.
+- **Keyword pinning** (`executor.pin_keywords`): additive on top of the algorithm. Pinned papers appear above the recommendations, never consume `max_paper_num` slots, and are bounded by `max_pinned_num`.
+
+Full text never participates in ranking. It is fetched only for papers that already made the email, to feed TL;DR and affiliation generation.
 
 ## 📌 Limitations
-- The recommendation uses embedding similarity with top-k aggregation, optional recency weighting, an optional relevance floor (`executor.min_score`), optional MMR diversification, and optional keyword pinning. Tuning `reranker.topk` / `executor.min_score` and curating your Zotero library (e.g. via `zotero.include_path`) further improves relevance.
-- Full text is only fetched for the papers that make it into the email, so execution time scales with `max_paper_num` rather than with the total number of daily papers. Extremely high `max_paper_num` can still exceed the Github Action runner quota (6h per execution for public repo, and 2000 mins per month for private repo). If you have special requirements, you can deploy the workflow in your own server, or use a self-hosted Github Action runner, or pay for the exceeded execution time.
 
+- Relevance is heuristic (embedding similarity with the knobs above). Tune `reranker.topk` / `executor.min_score` and curate the corpus via `zotero.include_path` to sharpen results.
+- Runtime cost sits in enrichment and scales with the size of the final email (pinned + top-N), not with the day's retrieval volume. Very large emails can still exceed the GitHub-hosted runner quota (6 h per job on public repos, 2000 min/month on private ones). Alternatives: a self-hosted runner, your own server, or paying for the overage.
+- The OpenAlex source covers exactly its built-in venue catalog; papers published outside those venues won't appear from that source.
 
 ## 📃 License
+
 Distributed under the AGPLv3 License. See `LICENSE` for detail.
 
 ## ❤️ Acknowledgement
+
+This project is a fork of [TideDra/zotero-arxiv-daily](https://github.com/TideDra/zotero-arxiv-daily); the original project and its author deserve the credit for creating it.
+
 - [pyzotero](https://github.com/urschrei/pyzotero)
 - [arxiv](https://github.com/lukasschwab/arxiv.py)
 - [sentence_transformers](https://github.com/UKPLab/sentence-transformers)
+- [pymupdf4llm](https://pypi.org/project/pymupdf4llm/) (full-text parsing)
 - [OpenAlex](https://openalex.org)
 
 ## ☕ Buy Me A Coffee
+
 If you find this project helpful, welcome to sponsor me via WeChat or via [ko-fi](https://ko-fi.com/tidedra).
 ![wechat_qr](assets/wechat_sponsor.JPG)
 
-
 ## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=TideDra/zotero-arxiv-daily&type=Date)](https://star-history.com/#TideDra/zotero-arxiv-daily&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=liujc-hit/zotero-arxiv-daily&type=Date)](https://star-history.com/#liujc-hit/zotero-arxiv-daily&Date)
