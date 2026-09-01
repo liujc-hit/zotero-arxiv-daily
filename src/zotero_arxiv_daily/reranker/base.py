@@ -1,14 +1,33 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 from datetime import datetime
 from omegaconf import DictConfig
 from ..protocol import Paper, CorpusPaper
 import numpy as np
 from typing import Type
 
+from .venue_citation_weighting import (
+    VenueCitationWeighting,
+    apply_venue_citation_weighting,
+    resolve_venue_citation_weighting,
+)
+
 # Default number of most-similar corpus papers to average over when scoring a
 # candidate. See BaseReranker.rerank for why top-k aggregation is preferred over
 # a weighted mean over the whole library.
 DEFAULT_TOPK = 10
+
+
+def cosine_similarity(
+    first_embeddings: np.ndarray, second_embeddings: np.ndarray
+) -> np.ndarray:
+    """Return pairwise cosine similarities between two embedding matrices."""
+    first_normalized = first_embeddings / np.linalg.norm(
+        first_embeddings, axis=1, keepdims=True
+    )
+    second_normalized = second_embeddings / np.linalg.norm(
+        second_embeddings, axis=1, keepdims=True
+    )
+    return np.dot(first_normalized, second_normalized.T)
 
 
 class BaseReranker(ABC):
@@ -96,6 +115,13 @@ class BaseReranker(ABC):
         # clamp to [0, 1]: 1 = pure relevance (no diversity term)
         return min(max(lam, 0.0), 1.0)
 
+    def _venue_citation_weighting(self) -> VenueCitationWeighting | None:
+        """Resolve a complete opt-in venue citation weighting configuration."""
+        config = getattr(self, "config", None)
+        if not isinstance(config, DictConfig):
+            return None
+        return resolve_venue_citation_weighting(config)
+
     def _mmr_target(self, n_candidates: int) -> int:
         """How many of the top candidates MMR should reorder (the email slots)."""
         cfg = getattr(self, "config", None)
@@ -108,13 +134,15 @@ class BaseReranker(ABC):
                 if hasattr(executor_cfg, "get")
                 else getattr(executor_cfg, "max_paper_num", None)
             )
+            if val is None:
+                return n_candidates
             target = int(val)
         except Exception:
             return n_candidates
         return max(1, min(target, n_candidates))
 
     def _mmr_reorder(
-        self, candidates: list[Paper], cand_texts: list[str], lam: float
+        self, candidates: list[Paper], cand_sim: np.ndarray, lam: float
     ) -> list[Paper]:
         """Greedy Maximal Marginal Relevance over the top candidates.
 
@@ -130,7 +158,6 @@ class BaseReranker(ABC):
         if target <= 1:
             return candidates
 
-        cand_sim = self.get_similarity_score(cand_texts, cand_texts)
         rel = np.array(
             [c.score if c.score is not None else 0.0 for c in candidates], dtype=float
         )
@@ -167,7 +194,16 @@ class BaseReranker(ABC):
         # were previously discarded, which diluted the relevance signal.
         cand_texts = [f"{c.title}\n{c.abstract}".strip() for c in candidates]
         corp_texts = [f"{c.title}\n{c.abstract}".strip() for c in corpus]
-        sim = self.get_similarity_score(cand_texts, corp_texts)
+        candidate_embeddings: np.ndarray | None
+        try:
+            embeddings = self.get_embeddings(cand_texts + corp_texts)
+        except NotImplementedError:
+            candidate_embeddings = None
+            sim = self.get_similarity_score(cand_texts, corp_texts)
+        else:
+            candidate_embeddings = embeddings[: len(candidates)]
+            corpus_embeddings = embeddings[len(candidates) :]
+            sim = cosine_similarity(candidate_embeddings, corpus_embeddings)
         assert sim.shape == (len(candidates), n_corpus)
 
         # Top-k mean aggregation: score each candidate by the mean of its k
@@ -201,21 +237,44 @@ class BaseReranker(ABC):
             scores = topk_sim.mean(axis=1)
         scores = scores * 10.0  # keep the historical ~0-10 score scale
 
+        venue_weighting = self._venue_citation_weighting()
+        if venue_weighting is not None:
+            scores = apply_venue_citation_weighting(
+                scores,
+                candidates,
+                venue_weighting,
+            )
+
+        # Score adjustments belong here so papers and features share one final
+        # stable score-order permutation before optional MMR.
         for s, c in zip(scores, candidates):
             c.score = float(s)
-        candidates = sorted(candidates, key=lambda x: x.score, reverse=True)
+        score_order = np.argsort(-scores, kind="stable")
+        candidates = [candidates[index] for index in score_order]
+        if candidate_embeddings is not None:
+            candidate_embeddings = candidate_embeddings[score_order]
 
         # Optional MMR diversity pass (reranker.mmr_lambda): reorders the top
         # candidates so near-duplicates do not fill consecutive email slots.
         # Disabled (null) by default — pure score order.
         mmr_lam = self._mmr_lambda()
         if mmr_lam is not None:
-            candidates = self._mmr_reorder(candidates, cand_texts, mmr_lam)
+            if candidate_embeddings is None:
+                cand_sim = self.get_similarity_score(cand_texts, cand_texts)
+                cand_sim = cand_sim[np.ix_(score_order, score_order)]
+            else:
+                cand_sim = cosine_similarity(candidate_embeddings, candidate_embeddings)
+            candidates = self._mmr_reorder(candidates, cand_sim, mmr_lam)
         return candidates
-    
-    @abstractmethod
-    def get_similarity_score(self, s1:list[str], s2:list[str]) -> np.ndarray:
+
+    def get_embeddings(self, texts: list[str]) -> np.ndarray:
+        """Encode texts for rerankers that expose reusable embeddings."""
         raise NotImplementedError
+
+    def get_similarity_score(self, s1:list[str], s2:list[str]) -> np.ndarray:
+        """Preserve the public pairwise-similarity interface for callers."""
+        embeddings = self.get_embeddings(s1 + s2)
+        return cosine_similarity(embeddings[: len(s1)], embeddings[len(s1) :])
 
 registered_rerankers = {}
 

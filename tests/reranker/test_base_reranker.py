@@ -7,7 +7,7 @@ import pytest
 from omegaconf import OmegaConf
 
 from zotero_arxiv_daily.reranker.base import BaseReranker, get_reranker_cls
-from zotero_arxiv_daily.protocol import CorpusPaper
+from zotero_arxiv_daily.protocol import CorpusPaper, Paper
 from tests.canned_responses import make_sample_paper, make_sample_corpus
 
 
@@ -47,6 +47,41 @@ class DualMatrixStubReranker(StubReranker):
         if s1 == s2:
             return self._cand_sim
         return self._sim
+
+
+class EmbeddingStubReranker(BaseReranker):
+    """Reranker with deterministic embeddings and observable encode calls."""
+
+    def __init__(self, embeddings_by_title: dict[str, np.ndarray]):
+        super().__init__(
+            OmegaConf.create({"reranker": {"topk": 1, "mmr_lambda": 0.7}})
+        )
+        self._embeddings_by_title: dict[str, np.ndarray] = embeddings_by_title
+        self.embedding_calls: list[list[str]] = []
+
+    def get_embeddings(self, texts: list[str]) -> np.ndarray:
+        self.embedding_calls.append(list(texts))
+        return np.vstack(
+            [self._embeddings_by_title[text.partition("\n")[0]] for text in texts]
+        )
+
+
+def make_unsorted_embedding_case() -> tuple[
+    EmbeddingStubReranker, list[Paper], list[CorpusPaper]
+]:
+    embeddings = {
+        "A": np.array([1.0, 0.0, 0.0, 0.0]),
+        "B": np.array([0.95, np.sqrt(1.0 - 0.95**2), 0.0, 0.0]),
+        "C": np.array([0.0, 0.0, 1.0, 0.0]),
+        "Corpus Paper 0": np.array([1.0, 0.0, 0.0, 0.0]),
+        "Corpus Paper 1": np.array([0.0, 0.0, 0.8, 0.6]),
+    }
+    papers = [
+        make_sample_paper(title="C"),
+        make_sample_paper(title="A"),
+        make_sample_paper(title="B"),
+    ]
+    return EmbeddingStubReranker(embeddings), papers, make_sample_corpus(2)
 
 
 def test_rerank_scores_and_sorts():
@@ -210,6 +245,31 @@ def test_rerank_mmr_separates_near_duplicate_candidates():
     assert abs(by_title["A"] - 9.0) < 1e-6
     assert abs(by_title["B"] - 8.5) < 1e-6
     assert abs(by_title["C"] - 8.0) < 1e-6
+
+
+def test_rerank_mmr_aligns_unsorted_candidates_with_candidate_embeddings():
+    # Given deliberately unsorted candidates with A and B near-duplicate.
+    reranker, papers, corpus = make_unsorted_embedding_case()
+
+    # When relevance sorting and MMR are applied.
+    ranked = reranker.rerank(papers, corpus)
+
+    # Then MMR uses embeddings in the same score order as the papers.
+    assert [paper.title for paper in ranked] == ["A", "C", "B"]
+
+
+def test_rerank_embeds_candidates_and_corpus_once_with_mmr_enabled():
+    # Given an embedding-backed reranker with MMR enabled.
+    reranker, papers, corpus = make_unsorted_embedding_case()
+
+    # When candidates are reranked.
+    _ = reranker.rerank(papers, corpus)
+
+    # Then candidate and corpus texts share one embedding operation.
+    assert [
+        [text.partition("\n")[0] for text in call]
+        for call in reranker.embedding_calls
+    ] == [["C", "A", "B", "Corpus Paper 1", "Corpus Paper 0"]]
 
 
 def test_rerank_mmr_disabled_by_default_keeps_score_order():
