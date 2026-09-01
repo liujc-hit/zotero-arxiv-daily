@@ -46,6 +46,7 @@
   - biorxiv
   - medrxiv
   - chemrxiv
+  - openalex, which retrieves new papers from a built-in robotics/mechatronics journal expansion plus a fixed default robotics conference set, matched by exact OpenAlex identifiers. No optional conference expansion is included.
 
 ## 📷 Screenshot
 ![screenshot](./assets/screenshot.png)
@@ -69,6 +70,14 @@ Below are all the secrets you need to set. They are invisible to anyone includin
 | RECEIVER | The e-mail address that receives the paper list. | abc@outlook.com |
 | OPENAI_API_KEY | API Key when using the API to access LLMs. You can get FREE API for using advanced open source LLMs in [SiliconFlow](https://cloud.siliconflow.cn/i/b3XhBRAm). | sk-xxx |
 | OPENAI_API_BASE | API URL when using the API to access LLMs. | https://api.siliconflow.cn/v1 |
+| OPENALEX_API_KEY | Optional. GitHub Actions **Secret** holding your primary free OpenAlex API key for a higher rate limit. The value is the raw key only: the code itself sends it as an `Authorization: Bearer` header, so do not include a `Bearer ` prefix in the Secret. | your-openalex-api-key |
+| OPENALEX_API_KEY_2 | Optional. GitHub Actions **Secret** holding a standby OpenAlex API key. It is tried only after the primary key gets rate limited. Leave it unset if you have just one key. | your-backup-openalex-api-key |
+
+OpenAlex anonymous (keyless) access is opt-in only, and it is controlled by a GitHub Actions repository **Variable** instead of a Secret:
+
+| Variable |Description | Example |
+| :---  | :---  | :--- |
+| OPENALEX_ALLOW_ANONYMOUS | Whether OpenAlex may fall back to keyless requests from the shared anonymous pool when no configured API key is usable. Absent, `false`, or any other value means no keyless access at all. Anonymous access is never implicit; only an explicit `true` turns it on. | true |
 
 Then you should also set a public variable `CUSTOM_CONFIG` for your custom configuration.
 ![vars](./assets/repo_var.png)
@@ -92,23 +101,39 @@ llm:
     key: ${oc.env:OPENAI_API_KEY}
     base_url: ${oc.env:OPENAI_API_BASE}
   api_mode: chat_completion # Or response to use the Responses API.
+  thinking: disabled # MiniMax-M3 only; MiniMax-M2-family models cannot disable thinking and must use null.
   generation_kwargs:
-    model: gpt-4o-mini
+    model: MiniMax-M3
 
 source:
   arxiv:
     category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
     include_cross_list: false # Set to true to include arXiv cross-list papers in these categories.
+  openalex:
+    api_keys: # Ordered keys from GitHub Actions Secrets; at most two distinct keys, empty entries are skipped.
+      - ${oc.env:OPENALEX_API_KEY,null} # Primary raw key, no 'Bearer ' prefix; null sends no key.
+      - ${oc.env:OPENALEX_API_KEY_2,null} # Optional standby raw key, tried after the primary is exhausted.
+    allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}} # Repository Variable; only explicit 'true' enables keyless access, anything else fails closed.
+    lookback_days: 1 # Number of completed UTC publication days to retrieve, ending yesterday.
 
 executor:
-  debug: ${oc.env:DEBUG,null}
-  source: ['arxiv']
+  debug: ${oc.decode:${oc.env:DEBUG,null}}
+  source: ['arxiv','openalex']
   pin_keywords: null # Optional. e.g. ["Mamba","world model"] force-pins matching papers to the top of the email.
 ```
 Set `source.arxiv.include_cross_list: true` if you want cross-listed papers included.
 Set `executor.pin_keywords` to a list of keywords (matched against title or abstract, case-insensitive) to always surface papers about those topics at the top of the email, regardless of their similarity score.
 >[!NOTE]
 > `${oc.env:XXX,yyy}` means the value of the environment variable `XXX`. If the variable is not set, the default value `yyy` will be used.
+
+>[!NOTE]
+> MiniMax thinking: `llm.thinking: disabled` is translated to `extra_body.thinking.type=disabled` in Chat Completions mode and `reasoning.effort=none` in Responses mode, and only for the exact model `MiniMax-M3`. MiniMax-M2, M2.1, M2.1-highspeed, M2.5, M2.5-highspeed, M2.7, and M2.7-highspeed cannot disable thinking and must use `thinking: null`.
+
+>[!NOTE]
+> OpenAlex source: it is activated only by including `openalex` in `executor.source`. It retrieves new papers from the built-in exact robotics/mechatronics venue catalog (a journal expansion plus a fixed conference set, matched by exact OpenAlex identifiers), so `api_keys`, `allow_anonymous`, and `lookback_days` are the only settings.
+
+>[!NOTE]
+> OpenAlex keys and failover: each Secret value holds the raw key only, and the client itself sends `Authorization: Bearer <key>`. Any 429 response permanently advances from the primary key to the standby key, and a successful response whose `X-RateLimit-Remaining` header is `0` also advances, starting with the next request. Network errors and 5xx responses are retried (up to three attempts) without rotating keys. After both keys are exhausted, the run fails closed unless `OPENALEX_ALLOW_ANONYMOUS` is explicitly `true`, in which case keyless requests are the last resort. The client also enforces its own cap of at most 100 request starts per second, no matter how many keys are configured.
 
 Here is the full configuration, `???` means the value must be filled in:
 ```yaml
@@ -127,6 +152,10 @@ source:
     category: null # The categories of target medrxiv papers. Find categories from [here](https://www.medrxiv.org/) Example: ["psychiatry and clinical psychology", "neurology"]
   chemrxiv:
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
+  openalex:
+    api_keys: [] # Ordered list of at most two distinct free OpenAlex API keys; the first usable key is sent and later entries serve as failover. Empty/null entries are skipped. Example: ["your-openalex-api-key","your-backup-openalex-api-key"]
+    allow_anonymous: false # Opt-in to keyless anonymous requests from the shared pool when no API key is usable. Keep false to fail closed. Example: true
+    lookback_days: 1 # Number of completed UTC publication days to retrieve, ending yesterday. Example: 3
 
 email:
   sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
@@ -140,6 +169,7 @@ llm:
     key: ??? # API Key of your LLM API. Example: sk-xxx
     base_url: ??? # API URL of your LLM API. Example: https://api.openai.com/v1
   api_mode: chat_completion # The LLM API to use. Options: chat_completion or response.
+  thinking: null # Set to 'disabled' to turn off thinking. Only maps to provider fields for the exact model 'MiniMax-M3'; MiniMax-M2-family models cannot disable thinking and must keep this null.
   generation_kwargs:
   # Arguments for the selected LLM API.
     max_tokens: 16384
@@ -167,7 +197,7 @@ executor:
   pin_keywords: null # List of keywords to force-pin to the TOP of the email, on top of the recommendation algorithm. A paper whose title OR abstract contains any keyword (case-insensitive) is pinned. Pinned papers do NOT count against max_paper_num. Example: ["Mamba","state space model"]
   max_pinned_num: 20 # Upper bound on pinned papers per email. Matches beyond this cap fall back to the normal recommendation pool. Example: 20
   enrich_workers: 8 # Number of parallel workers for fetching full text + generating TL;DR/affiliations for the final top-N papers. Raise for faster enrichment, lower if your LLM/embedding provider rate-limits you. Example: 8
-  source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
+  source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv','openalex']
   reranker: local # The reranker to use. Example: 'local' or 'api'
 ```
 
@@ -212,6 +242,7 @@ Distributed under the AGPLv3 License. See `LICENSE` for detail.
 - [pyzotero](https://github.com/urschrei/pyzotero)
 - [arxiv](https://github.com/lukasschwab/arxiv.py)
 - [sentence_transformers](https://github.com/UKPLab/sentence-transformers)
+- [OpenAlex](https://openalex.org)
 
 ## ☕ Buy Me A Coffee
 If you find this project helpful, welcome to sponsor me via WeChat or via [ko-fi](https://ko-fi.com/tidedra).
