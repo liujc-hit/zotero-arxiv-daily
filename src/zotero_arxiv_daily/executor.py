@@ -4,14 +4,15 @@ from omegaconf import DictConfig, ListConfig
 from .utils import glob_match
 from .retriever import get_retriever_cls
 from .protocol import CorpusPaper, Paper
+from .enrichment.pipeline import build_pipeline_enrichers
+from .final_enrichment import enrich_final_papers
+from .retrieval import retrieve_and_merge
 import random
 from datetime import datetime
 from .reranker import get_reranker_cls
 from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
-from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
 
 
 def _paper_matches_keywords(paper: Paper, keywords: list[str]) -> bool:
@@ -44,8 +45,13 @@ class Executor:
         self.retrievers = {
             source: get_retriever_cls(source)(config) for source in config.executor.source
         }
+        self.pipeline_enrichers = build_pipeline_enrichers(config, self.retrievers)
         self.reranker = get_reranker_cls(config.executor.reranker)(config)
-        self.openai_client = OpenAI(api_key=config.llm.api.key, base_url=config.llm.api.base_url)
+        self.openai_client = OpenAI(
+            api_key=config.llm.api.key,
+            base_url=config.llm.api.base_url,
+            max_retries=0,
+        )
     def fetch_zotero_corpus(self) -> list[CorpusPaper]:
         logger.info("Fetching zotero corpus")
         zot = zotero.Zotero(self.config.zotero.user_id, 'user', self.config.zotero.api_key)
@@ -111,15 +117,8 @@ class Executor:
                 f"ignore_path={zcfg.get('ignore_path')} (api_key omitted for safety)."
             )
             return
-        all_papers = []
-        for source, retriever in self.retrievers.items():
-            logger.info(f"Retrieving {source} papers...")
-            papers = retriever.retrieve_papers()
-            if len(papers) == 0:
-                logger.info(f"No {source} papers found")
-                continue
-            logger.info(f"Retrieved {len(papers)} {source} papers")
-            all_papers.extend(papers)
+        all_papers = retrieve_and_merge(self.retrievers)
+        self.pipeline_enrichers.enrich_before_rerank(all_papers)
         logger.info(f"Total {len(all_papers)} papers retrieved from all sources")
         reranked_papers = []
         pinned_papers: list[Paper] = []
@@ -250,38 +249,23 @@ class Executor:
         return pinned, remaining
 
     def _enrich_papers(self, papers: list[Paper]) -> None:
-        """Fetch full text lazily and generate TL;DR + affiliations in parallel.
-
-        Why this is the central speed fix:
-        - Full text is only needed for TL;DR/affiliation generation of the papers
-          that actually appear in the email, and is irrelevant to ranking. So we
-          fetch it only here, for the already-reranked top-N, instead of for the
-          hundreds of papers retrieved each day.
-        - TL;DR + affiliation generation is I/O-bound (LLM API calls). Running it
-          serially over ~100 papers dominated wall-clock time; a thread pool turns
-          it into a few minutes.
-        """
+        """Enrich the ordered final selection with one combined LLM call each."""
         if len(papers) == 0:
             return
-        workers_cfg = getattr(self.config.executor, "enrich_workers", None) or 8
-        workers = max(1, min(int(workers_cfg), len(papers)))
+        workers_config = getattr(self.config.executor, "enrich_workers", 8)
+        try:
+            workers = max(1, int(workers_config))
+        except (TypeError, ValueError):
+            workers = 8
+        worker_count = min(workers, len(papers))
         logger.info(
             f"Fetching full text + generating TL;DR/affiliations for "
-            f"{len(papers)} papers ({workers} workers)..."
+            f"{len(papers)} papers ({worker_count} workers)..."
         )
-
-        def _enrich_one(p: Paper) -> None:
-            # Lazy full-text: only download if not already present (e.g. a source
-            # that ships full text, or a stub in tests).
-            if p.full_text is None:
-                retriever = self.retrievers.get(p.source)
-                if retriever is not None:
-                    try:
-                        p.full_text = retriever.fetch_full_text(p)
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch full text for {p.url}: {e}")
-            p.generate_tldr(self.openai_client, self.config.llm)
-            p.generate_affiliations(self.openai_client, self.config.llm)
-
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            list(tqdm(ex.map(_enrich_one, papers), total=len(papers), desc="Enriching papers"))
+        _ = enrich_final_papers(
+            papers,
+            self.retrievers,
+            self.openai_client,
+            self.config.llm,
+            workers,
+        )
