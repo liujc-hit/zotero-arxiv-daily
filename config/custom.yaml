@@ -15,13 +15,20 @@ llm:
     key: ${oc.env:OPENAI_API_KEY}
     base_url: ${oc.env:OPENAI_API_BASE}
   api_mode: chat_completion
+  thinking: disabled # MiniMax-M3 only; MiniMax-M2-family models cannot disable thinking and must use null.
   generation_kwargs:
-    model: gpt-4o-mini
+    model: MiniMax-M3
 
 source:
   arxiv:
     category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
+  openalex:
+    api_keys:
+      - ${oc.env:OPENALEX_API_KEY,null} # Primary free key; null sends no key.
+      - ${oc.env:OPENALEX_API_KEY_2,null} # Failover key used when the primary is exhausted.
+    allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}} # Opt-in to anonymous requests; missing resolves to boolean false (fail closed).
+    lookback_days: 1
 
 executor:
-  debug: ${oc.env:DEBUG,null}
-  source: ['arxiv']
+  debug: ${oc.decode:${oc.env:DEBUG,null}}
+  source: ['arxiv','openalex']
