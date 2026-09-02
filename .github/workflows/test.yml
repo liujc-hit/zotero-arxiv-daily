@@ -15,6 +15,18 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v7.1.4
 
+      - name: Load encrypted sent DOI state
+        id: load-sent-doi-state
+        uses: actions/github-script@v8
+        env:
+          SENT_DOI_STATE_ENABLED: ${{ vars.SENT_DOI_STATE_ENABLED || 'false' }}
+          SENT_DOI_STATE_KEY_PRESENT: ${{ secrets.SENT_DOI_STATE_KEY != '' }}
+        with:
+          retries: 0
+          script: |
+            const loadSentDoiState = require("./.github/scripts/load-sent-doi-state.cjs");
+            await loadSentDoiState({ github, context, core });
+
 
       - name: Run script
         env:
