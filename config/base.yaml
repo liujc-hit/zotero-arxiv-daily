@@ -20,7 +20,7 @@ source:
   openalex:
     api_keys: [] # Ordered list of free OpenAlex API keys; the first usable key is sent and later entries serve as failover. Empty/null entries are skipped. Example: ["your-openalex-api-key","your-backup-openalex-api-key"]
     allow_anonymous: false # Opt-in to keyless anonymous requests when no API key is configured; keep false to avoid OpenAlex rate limits. Example: true
-    lookback_days: 1 # Number of completed UTC publication days to retrieve, ending yesterday. Example: 3
+    lookback_days: 30 # Number of completed UTC publication days to retrieve, ending yesterday. Wider window mitigates OpenAlex's delayed-index by capturing works indexed up to ~a month after publication; paired with persistent DOI deduplication. Example: 30
 
 enrichment:
   enabled: false

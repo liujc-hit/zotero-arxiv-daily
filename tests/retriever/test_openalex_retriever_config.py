@@ -43,7 +43,7 @@ def test_openalex_defaults_are_inherited_from_base_config(config, monkeypatch):
     assert OmegaConf.to_container(openalex_cfg, resolve=True) == {
         "api_keys": [None, None],
         "allow_anonymous": False,
-        "lookback_days": 1,
+        "lookback_days": 30,
     }
 
 

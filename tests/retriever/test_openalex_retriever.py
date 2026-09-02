@@ -131,7 +131,11 @@ def test_identifiers_are_batched_at_exactly_one_hundred(openalex_config, monkeyp
 
 @pytest.mark.parametrize(
     ("lookback_days", "start", "end"),
-    [(1, "2026-08-30", "2026-08-30"), (3, "2026-08-28", "2026-08-30")],
+    [
+        (1, "2026-08-30", "2026-08-30"),
+        (3, "2026-08-28", "2026-08-30"),
+        (30, "2026-08-01", "2026-08-30"),
+    ],
 )
 def test_date_window_contains_only_completed_utc_days(
     openalex_config, monkeypatch, single_venue, fixed_now, lookback_days, start, end

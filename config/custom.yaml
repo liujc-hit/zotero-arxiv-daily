@@ -30,7 +30,7 @@ source:
       - ${oc.env:OPENALEX_API_KEY,null} # Primary free key; null sends no key.
       - ${oc.env:OPENALEX_API_KEY_2,null} # Failover key used when the primary is exhausted.
     allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}} # Opt-in to anonymous requests; missing resolves to boolean false (fail closed).
-    lookback_days: 1
+    lookback_days: 30
 
 enrichment:
   enabled: ${oc.decode:${oc.env:ABSTRACT_ENRICHMENT_ENABLED,'false'}}

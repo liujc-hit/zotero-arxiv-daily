@@ -38,12 +38,18 @@ def _resolved_openalex(monkeypatch, config_name="default", **env):
     return container
 
 
-def test_base_defaults_are_empty_keys_opt_out_anonymous_and_one_day(monkeypatch):
+def test_base_defaults_are_empty_keys_opt_out_anonymous_and_thirty_days(monkeypatch):
     container = _resolved_openalex(monkeypatch, config_name="base")
 
     # Exact dict: also proves no legacy singular api_key field lingers.
-    assert container == {"api_keys": [], "allow_anonymous": False, "lookback_days": 1}
+    assert container == {"api_keys": [], "allow_anonymous": False, "lookback_days": 30}
     assert isinstance(container["api_keys"], list)
+
+
+def test_custom_resolves_thirty_day_overlap_from_explicit_override(monkeypatch):
+    container = _resolved_openalex(monkeypatch)
+
+    assert container["lookback_days"] == 30
 
 
 def test_custom_resolves_keys_in_declared_order_as_strings(monkeypatch):
