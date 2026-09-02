@@ -13,6 +13,7 @@ import zotero_arxiv_daily.executor as executor_module
 from zotero_arxiv_daily.enrichment.pipeline import PipelineEnrichers
 from zotero_arxiv_daily.executor import Executor
 from zotero_arxiv_daily.protocol import CorpusPaper, Paper
+from zotero_arxiv_daily.sent_doi_state import DisabledSentDoiStateStore
 
 type ConfigValue = str | int | float | bool | None | list[str]
 
@@ -103,6 +104,7 @@ def executor_config(
 def make_runtime_executor() -> Executor:
     executor = Executor.__new__(Executor)
     executor.config = executor_config()
+    executor.sent_doi_state_store = DisabledSentDoiStateStore()
     executor.pipeline_enrichers = PipelineEnrichers()
     executor.fetch_zotero_corpus = lambda: [
         CorpusPaper("Corpus", "Corpus abstract", datetime(2026, 1, 1), [])

@@ -7,6 +7,11 @@ from .protocol import CorpusPaper, Paper
 from .enrichment.pipeline import build_pipeline_enrichers
 from .final_enrichment import enrich_final_papers
 from .retrieval import retrieve_and_merge
+from .sent_doi_state import (
+    build_sent_doi_state_store,
+    filter_sent_doi_candidates,
+    normalized_paper_dois,
+)
 import random
 from datetime import datetime
 from .reranker import get_reranker_cls
@@ -21,7 +26,10 @@ def _paper_matches_keywords(paper: Paper, keywords: list[str]) -> bool:
     return any(kw in haystack for kw in keywords)
 
 
-def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key: str) -> list[str] | None:
+def normalize_path_patterns(
+    patterns: list[str] | ListConfig | str | None,
+    config_key: str,
+) -> list[str] | None:
     if patterns is None:
         return None
 
@@ -40,6 +48,7 @@ def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key:
 class Executor:
     def __init__(self, config:DictConfig):
         self.config = config
+        self.sent_doi_state_store = build_sent_doi_state_store(config)
         self.include_path_patterns = normalize_path_patterns(config.zotero.include_path, "include_path")
         self.ignore_path_patterns = normalize_path_patterns(config.zotero.ignore_path, "ignore_path")
         self.retrievers = {
@@ -103,7 +112,8 @@ class Executor:
         return corpus
 
     
-    def run(self):
+    def run(self) -> None:
+        sent_dois = self.sent_doi_state_store.load()
         corpus = self.fetch_zotero_corpus()
         corpus = self.filter_corpus(corpus)
         if len(corpus) == 0:
@@ -118,9 +128,10 @@ class Executor:
             )
             return
         all_papers = retrieve_and_merge(self.retrievers)
+        all_papers = filter_sent_doi_candidates(all_papers, sent_dois)
         self.pipeline_enrichers.enrich_before_rerank(all_papers)
         logger.info(f"Total {len(all_papers)} papers retrieved from all sources")
-        reranked_papers = []
+        reranked_papers: list[Paper] = []
         pinned_papers: list[Paper] = []
         if len(all_papers) > 0:
             logger.info("Reranking papers...")
@@ -133,16 +144,21 @@ class Executor:
             pinned_papers, reranked_papers = self._select_pinned(reranked_papers)
             reranked_papers = self._apply_min_score(reranked_papers)
             reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
-            if len(pinned_papers) + len(reranked_papers) == 0 and not self.config.executor.send_empty:
+        email_papers = pinned_papers + reranked_papers
+        if len(all_papers) > 0:
+            if len(email_papers) == 0 and not self.config.executor.send_empty:
                 logger.info("No papers survived reranking + relevance floor. No email will be sent.")
                 return
-            self._enrich_papers(pinned_papers + reranked_papers)
         elif not self.config.executor.send_empty:
             logger.info("No new papers found. No email will be sent.")
             return
+        self._enrich_papers(email_papers)
         logger.info("Sending email...")
-        email_content = render_email(pinned_papers + reranked_papers)
+        email_content = render_email(email_papers)
         send_email(self.config, email_content)
+        emailed_dois = normalized_paper_dois(email_papers)
+        if emailed_dois:
+            self.sent_doi_state_store.save(sent_dois | emailed_dois)
         logger.info("Email sent successfully")
 
     # ------------------------------------------------------------------

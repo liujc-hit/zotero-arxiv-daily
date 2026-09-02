@@ -16,6 +16,7 @@ import zotero_arxiv_daily.executor as executor_module
 from zotero_arxiv_daily.enrichment.pipeline import PipelineEnrichers
 from zotero_arxiv_daily.executor import Executor
 from zotero_arxiv_daily.protocol import CorpusPaper, Paper
+from zotero_arxiv_daily.sent_doi_state import DisabledSentDoiStateStore
 
 type ConfigValue = str | int | float | bool | None | list[str]
 
@@ -92,6 +93,7 @@ def executor_config(
 def runtime_executor(monkeypatch: pytest.MonkeyPatch) -> Executor:
     executor = Executor.__new__(Executor)
     executor.config = executor_config()
+    executor.sent_doi_state_store = DisabledSentDoiStateStore()
     executor.include_path_patterns = None
     executor.ignore_path_patterns = None
     executor.pipeline_enrichers = PipelineEnrichers()

@@ -7,6 +7,7 @@ from omegaconf import OmegaConf
 
 from zotero_arxiv_daily.executor import Executor, normalize_path_patterns
 from zotero_arxiv_daily.protocol import CorpusPaper
+from zotero_arxiv_daily.sent_doi_state import DisabledSentDoiStateStore
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +439,7 @@ def test_empty_corpus_error_omits_api_key(config, monkeypatch):
 
     executor = Executor.__new__(Executor)
     executor.config = config
+    executor.sent_doi_state_store = DisabledSentDoiStateStore()
     executor.include_path_patterns = None
     executor.ignore_path_patterns = None
     executor.run()
