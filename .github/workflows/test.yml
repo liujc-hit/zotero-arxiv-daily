@@ -2,12 +2,20 @@ name: Test
 on:
   workflow_dispatch:
 
+concurrency:
+  group: sent-doi-state-v1
+  cancel-in-progress: false
+
 jobs:
   calculate-and-send:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       #  with:
       #    repository: ${{ vars.REPOSITORY }}
       #    ref: ${{ vars.REF }}
@@ -26,7 +34,6 @@ jobs:
           script: |
             const loadSentDoiState = require("./.github/scripts/load-sent-doi-state.cjs");
             await loadSentDoiState({ github, context, core });
-
 
       - name: Run script
         env:
@@ -65,3 +72,16 @@ jobs:
             '++sent_doi_state.enabled=${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED}}' \
             '++sent_doi_state.path=.state/sent-dois.fernet' \
             '++sent_doi_state.key=${oc.env:SENT_DOI_STATE_KEY}'
+
+      - name: Persist encrypted sent DOI state
+        if: ${{ success() }}
+        uses: actions/github-script@v8
+        env:
+          SENT_DOI_STATE_ENABLED: ${{ vars.SENT_DOI_STATE_ENABLED || 'false' }}
+          SENT_DOI_STATE_BRANCH_EXISTS: ${{ steps.load-sent-doi-state.outputs.branch-exists }}
+          SENT_DOI_STATE_BLOB_SHA: ${{ steps.load-sent-doi-state.outputs.blob-sha }}
+        with:
+          retries: 0
+          script: |
+            const persistSentDoiState = require("./.github/scripts/persist-sent-doi-state.cjs");
+            await persistSentDoiState({ github, context, core });
