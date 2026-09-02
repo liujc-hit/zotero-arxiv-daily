@@ -31,6 +31,10 @@ source:
       - ${oc.env:OPENALEX_API_KEY_2,null} # Failover key used when the primary is exhausted.
     allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}} # Opt-in to anonymous requests; missing resolves to boolean false (fail closed).
     lookback_days: 30
+  pubmed:
+    query: ${oc.env:PUBMED_QUERY,null} # PubMed discovery query; required when the pubmed source is enabled.
+    contact_email: ${oc.env:PUBMED_EMAIL,null}
+    api_key: ${oc.env:NIH_API,null}
 
 enrichment:
   enabled: ${oc.decode:${oc.env:ABSTRACT_ENRICHMENT_ENABLED,'false'}}
@@ -70,3 +74,8 @@ reranker:
 executor:
   debug: ${oc.decode:${oc.env:DEBUG,null}}
   source: ${oc.decode:${oc.env:PAPER_SOURCES,'["arxiv","openalex"]'}}
+
+sent_doi_state:
+  enabled: ${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED,'false'}} # Missing resolves to boolean false (fail closed).
+  path: .state/sent-dois.fernet
+  key: ${oc.env:SENT_DOI_STATE_KEY,null} # Optional Fernet key; required only when enabled.

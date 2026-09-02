@@ -1,78 +1,22 @@
-"""Hydra contracts for disabled-by-default retrieval and ranking features."""
+"""Provider enrichment and runtime contracts for disabled-by-default features."""
 
-from collections.abc import Mapping
-from enum import Enum
-from pathlib import Path
-from typing import Final, Never
+from typing import Never
 
-from hydra import compose, initialize_config_dir
-from hydra.core.global_hydra import GlobalHydra
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf
 import pytest
 
 import zotero_arxiv_daily.enrichment.pipeline as pipeline_module
 from zotero_arxiv_daily.enrichment.pipeline import build_pipeline_enrichers
-
-
-_CONFIG_DIR: Final = str(Path(__file__).resolve().parent.parent / "config")
-_PROVIDERS: Final = ("pubmed", "ieee", "elsevier", "springer")
-_FEATURE_ENV_VARS: Final = (
-    "CROSSREF_MAILTO",
-    "ABSTRACT_ENRICHMENT_ENABLED",
-    "PUBMED_ENABLED",
-    "PUBMED_EMAIL",
-    "PUBMED_ISSNS",
-    "NIH_API",
-    "IEEE_ENABLED",
-    "IEEE_XPLORE_API",
-    "ELSEVIER_ENABLED",
-    "ELSEVIER_API",
-    "SPRINGER_ENABLED",
-    "SPRINGER_API",
-    "VENUE_PRESTIGE_ENABLED",
-    "PAPER_SOURCES",
+from .feature_config_support import (
+    ConfigValue,
+    FEATURE_ENV_VARS,
+    SectionKey,
+    compose_config,
+    resolved_section,
 )
 
-type ConfigValue = (
-    str | int | float | bool | None | list[ConfigValue] | dict[str, ConfigValue]
-)
-# Mirrors omegaconf.base.DictKeyType so to_container's result stays assignable
-# without rebuilding the mapping (dict key types are invariant).
-type SectionKey = str | bytes | int | float | bool | Enum
-type ResolvedSection = dict[SectionKey, ConfigValue] | list[ConfigValue] | str | None
 
-
-def _compose_config(
-    monkeypatch: pytest.MonkeyPatch,
-    config_name: str,
-    env: Mapping[str, str] | None = None,
-) -> DictConfig:
-    configured_env = env or {}
-    for name in _FEATURE_ENV_VARS:
-        if name in configured_env:
-            monkeypatch.setenv(name, configured_env[name])
-        else:
-            monkeypatch.delenv(name, raising=False)
-
-    GlobalHydra.instance().clear()
-    try:
-        with initialize_config_dir(config_dir=_CONFIG_DIR, version_base=None):
-            return compose(config_name=config_name)
-    finally:
-        GlobalHydra.instance().clear()
-
-
-def _forbidden_constructor(*args: Never, **kwargs: Never) -> Never:
-    del args, kwargs
-    pytest.fail("disabled feature constructed an optional runtime service")
-
-
-def _resolved_section(config: DictConfig, key: str) -> dict[SectionKey, ConfigValue]:
-    """Resolve one composed config subtree into a plain JSON-like mapping."""
-    subtree: DictConfig | ListConfig | None = OmegaConf.select(config, key)
-    section: ResolvedSection = OmegaConf.to_container(subtree, resolve=True)
-    assert isinstance(section, dict)
-    return section
+_PROVIDERS = ("pubmed", "ieee", "elsevier", "springer")
 
 
 def _nested_section(
@@ -91,20 +35,21 @@ def _raw_sources(config: DictConfig) -> list[ConfigValue]:
     return sources
 
 
-def test_base_has_complete_neutral_feature_defaults(
+def _forbidden_constructor(*args: Never, **kwargs: Never) -> Never:
+    del args, kwargs
+    pytest.fail("disabled feature constructed an optional runtime service")
+
+
+def test_base_enrichment_defaults_are_disabled_with_typed_provider_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given the checked-in base configuration without user overrides.
-    config = _compose_config(monkeypatch, "base")
+    config = compose_config(monkeypatch, "base")
 
-    # When every new feature subtree is resolved.
-    crossref = _resolved_section(config, "source.crossref")
-    enrichment = _resolved_section(config, "enrichment")
-    venue = _resolved_section(config, "reranker.venue_prestige")
+    # When the enrichment subtree is resolved.
+    enrichment = resolved_section(config, "enrichment")
 
     # Then defaults are complete, typed, and operationally neutral.
-    assert crossref == {"mailto": None, "lookback_days": 1}
-    assert type(crossref["lookback_days"]) is int
     assert enrichment == {
         "enabled": False,
         "workers": 3,
@@ -146,26 +91,19 @@ def test_base_has_complete_neutral_feature_defaults(
         assert section["enabled"] is False
         assert type(section["request_rate"]) is float
         assert type(section["issns"]) is list
-    assert venue == {"enabled": False, "weight": 0.1, "max_multiplier": 1.5}
-    assert venue["enabled"] is False
-    assert type(venue["weight"]) is float
-    assert type(venue["max_multiplier"]) is float
 
 
-def test_missing_custom_env_resolves_safe_typed_defaults(
+def test_missing_custom_env_resolves_enrichment_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given every new custom environment variable is absent.
-    config = _compose_config(monkeypatch, "default")
+    config = compose_config(monkeypatch, "default")
 
-    # When the composed custom feature values are resolved.
-    crossref = _resolved_section(config, "source.crossref")
-    enrichment = _resolved_section(config, "enrichment")
-    venue = _resolved_section(config, "reranker.venue_prestige")
+    # When the enrichment subtree is resolved.
+    enrichment = resolved_section(config, "enrichment")
     sources = _raw_sources(config)
 
     # Then all opt-ins fail closed and optional identity values remain empty.
-    assert crossref == {"mailto": None, "lookback_days": 1}
     assert enrichment["enabled"] is False
     assert (
         [_nested_section(enrichment, name)["enabled"] for name in _PROVIDERS]
@@ -180,13 +118,11 @@ def test_missing_custom_env_resolves_safe_typed_defaults(
         [_nested_section(enrichment, name)["issns"] for name in _PROVIDERS]
         == [[], [], [], []]
     )
-    assert venue == {"enabled": False, "weight": 0.1, "max_multiplier": 1.5}
-    assert venue["enabled"] is False
     assert type(sources) is list
     assert sources == ["arxiv", "openalex"]
 
 
-def test_populated_custom_env_resolves_values_types_and_order(
+def test_populated_custom_env_resolves_enrichment_identities_and_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given inert values for every new custom environment boundary.
@@ -195,6 +131,7 @@ def test_populated_custom_env_resolves_values_types_and_order(
         "ABSTRACT_ENRICHMENT_ENABLED": "true",
         "PUBMED_ENABLED": "true",
         "PUBMED_EMAIL": "pubmed-contact@example.test",
+        "PUBMED_QUERY": "inert pubmed discovery query",
         "PUBMED_ISSNS": '["0028-0836","0018-9219"]',
         "NIH_API": "inert-nih-marker",
         "IEEE_ENABLED": "true",
@@ -204,21 +141,17 @@ def test_populated_custom_env_resolves_values_types_and_order(
         "SPRINGER_ENABLED": "true",
         "SPRINGER_API": "inert-springer-marker",
         "VENUE_PRESTIGE_ENABLED": "true",
+        "SENT_DOI_STATE_ENABLED": "true",
+        "SENT_DOI_STATE_KEY": "inert-sent-doi-state-key",
         "PAPER_SOURCES": '["crossref","openalex","arxiv"]',
     }
-    config = _compose_config(monkeypatch, "default", env)
+    config = compose_config(monkeypatch, "default", env)
 
-    # When environment-backed subtrees are fully resolved.
-    crossref = _resolved_section(config, "source.crossref")
-    enrichment = _resolved_section(config, "enrichment")
-    venue = _resolved_section(config, "reranker.venue_prestige")
+    # When the enrichment subtree is resolved.
+    enrichment = resolved_section(config, "enrichment")
     sources = _raw_sources(config)
 
     # Then booleans, identities, decoded lists, and source order are preserved.
-    assert crossref == {
-        "mailto": "crossref-contact@example.test",
-        "lookback_days": 1,
-    }
     assert enrichment["enabled"] is True
     assert (
         [_nested_section(enrichment, name)["enabled"] for name in _PROVIDERS]
@@ -239,8 +172,6 @@ def test_populated_custom_env_resolves_values_types_and_order(
         "inert-elsevier-marker",
         "inert-springer-marker",
     ]
-    assert venue == {"enabled": True, "weight": 0.1, "max_multiplier": 1.5}
-    assert venue["enabled"] is True
     assert type(sources) is list
     assert sources == ["crossref", "openalex", "arxiv"]
     assert all(isinstance(source, str) for source in sources)
@@ -251,7 +182,7 @@ def test_existing_default_fixture_builds_no_optional_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given the repository's existing composed fixture and no feature env opt-ins.
-    for name in _FEATURE_ENV_VARS:
+    for name in FEATURE_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     for constructor_name in (
         "CrossrefClient",

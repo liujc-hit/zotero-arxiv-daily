@@ -21,6 +21,12 @@ source:
     api_keys: [] # Ordered list of free OpenAlex API keys; the first usable key is sent and later entries serve as failover. Empty/null entries are skipped. Example: ["your-openalex-api-key","your-backup-openalex-api-key"]
     allow_anonymous: false # Opt-in to keyless anonymous requests when no API key is configured; keep false to avoid OpenAlex rate limits. Example: true
     lookback_days: 30 # Number of completed UTC publication days to retrieve, ending yesterday. Wider window mitigates OpenAlex's delayed-index by capturing works indexed up to ~a month after publication; paired with persistent DOI deduplication. Example: 30
+  pubmed:
+    query: null # The PubMed discovery query for new papers, using PubMed search syntax. Required when the pubmed source is enabled. Example: "robotics[Title]"
+    contact_email: null # Contact email for polite PubMed API access. Required when the pubmed source is enabled. Example: curator@example.com
+    api_key: null # Optional NCBI API key that raises the PubMed request allowance. Example: your-ncbi-api-key
+    lookback_days: 3 # Number of completed UTC entry days to retrieve, ending yesterday. Example: 3
+    request_rate: 10.0 # Maximum PubMed requests per second; NCBI allows 10 with an API key and 3 without. Example: 3.0
 
 enrichment:
   enabled: false
@@ -98,5 +104,10 @@ executor:
   pin_keywords: null # List of keywords to force-pin to the TOP of the email, on top of the recommendation algorithm. A paper whose title OR abstract contains any keyword (case-insensitive) is pinned. Pinned papers do NOT count against max_paper_num. Example: ["Mamba","state space model"]
   max_pinned_num: 20 # Upper bound on pinned papers per email. Matches beyond this cap fall back to the normal recommendation pool. Example: 20
   enrich_workers: 8 # Number of parallel workers for fetching full text + generating TL;DR/affiliations for the final top-N papers. Raise for faster enrichment, lower if your LLM/embedding provider rate-limits you.
-  source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv','openalex']
+  source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv','openalex','pubmed']
   reranker: local # The reranker to use. Example: 'local' or 'api'
+
+sent_doi_state:
+  enabled: false # Whether to persist the canonical DOIs of sent papers in an encrypted local file so later runs skip them. Example: true
+  path: .state/sent-dois.fernet # Path of the encrypted sent-DOI state file, authenticated with Fernet and replaced atomically. Example: .state/sent-dois.fernet
+  key: null # Fernet key encrypting the sent-DOI state. Required when enabled; generate one with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Example: your-fernet-key
