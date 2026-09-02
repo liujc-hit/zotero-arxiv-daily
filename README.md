@@ -123,19 +123,19 @@
         include_new_versions: false  # true also includes revised versions of existing preprints.
       crossref:
         mailto: ${oc.env:CROSSREF_MAILTO,null} # Required when the Crossref source or abstract enrichment is enabled.
-        lookback_days: 30  # Completed UTC publication days to retrieve, ending yesterday. The 30-day default mitigates OpenAlex's delayed indexing; sent-DOI deduplication keeps the overlap from being re-sent.
+        lookback_days: 1  # Completed UTC publication days to retrieve, ending yesterday.
       openalex:
         api_keys:  # Raw keys from Secrets; null entries are skipped, at most two distinct keys.
           - ${oc.env:OPENALEX_API_KEY,null}
           - ${oc.env:OPENALEX_API_KEY_2,null}
         allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}}
+        lookback_days: 30  # Completed UTC publication days to retrieve, ending yesterday. The 30-day default mitigates OpenAlex's delayed indexing; sent-DOI deduplication keeps the overlap from being re-sent.
       pubmed:  # Discovery source; independent of enrichment.pubmed below.
         query: ${oc.env:PUBMED_QUERY,null} # Required when this source is enabled; there is no default query.
         contact_email: ${oc.env:PUBMED_EMAIL,null} # Required when this source is enabled.
         api_key: ${oc.env:NIH_API,null} # Optional; raises the effective rate cap from 3/s to 10/s.
         lookback_days: 3  # Completed UTC entry days to retrieve, ending yesterday.
         request_rate: 10.0  # Client-side cap; the effective rate is still 3/s anonymous, 10/s with a key.
-        lookback_days: 1  # Completed UTC publication days to retrieve, ending yesterday.
 
     enrichment:
       enabled: ${oc.decode:${oc.env:ABSTRACT_ENRICHMENT_ENABLED,'false'}}
