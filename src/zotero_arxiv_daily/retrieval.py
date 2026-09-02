@@ -84,6 +84,12 @@ def _merge_missing_metadata(winner: Paper, duplicate: Paper) -> None:
             if duplicate_publisher != "":
                 winner.publisher = duplicate_publisher
 
+    if winner.journal is None or winner.journal.strip() == "":
+        if duplicate.journal is not None:
+            duplicate_journal = duplicate.journal.strip()
+            if duplicate_journal != "":
+                winner.journal = duplicate_journal
+
     if winner.is_preprint is None and duplicate.is_preprint is not None:
         winner.is_preprint = duplicate.is_preprint
 

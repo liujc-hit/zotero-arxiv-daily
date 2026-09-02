@@ -272,6 +272,35 @@ def test_known_preprint_conflict_keeps_winner(
     assert winner.is_preprint is winner_value
 
 
+@pytest.mark.parametrize(
+    ("winner_journal", "duplicate_journal", "expected"),
+    [
+        pytest.param(None, "  Journal of Record  ", "Journal of Record", id="missing"),
+        pytest.param(" \t", "Journal of Record", "Journal of Record", id="blank"),
+        pytest.param("Winner Journal", "Duplicate Journal", "Winner Journal", id="known"),
+        pytest.param(None, " \n", None, id="blank-duplicate"),
+    ],
+)
+def test_doi_duplicate_journal_fills_only_a_blank_winner(
+    winner_journal: str | None,
+    duplicate_journal: str | None,
+    expected: str | None,
+) -> None:
+    # Given: DOI duplicates with independently present or missing journal metadata.
+    winner = _paper("winner", "10.9898/journal")
+    winner.journal = winner_journal
+    duplicate = _paper("duplicate", "10.9898/journal")
+    duplicate.journal = duplicate_journal
+
+    # When: the later duplicate is merged through source-order deduplication.
+    result = retrieve_and_merge({"source": StubRetriever(lambda: [winner, duplicate])})
+
+    # Then: only a missing winner is filled, without replacing winner identity.
+    assert result == [winner]
+    assert result[0] is winner
+    assert winner.journal == expected
+
+
 def test_issn_merge_is_valid_normalized_stable_union() -> None:
     # Given: winner-first ISSNs with invalid and repeated variants.
     winner = _paper("winner", "10.9999/issns")
