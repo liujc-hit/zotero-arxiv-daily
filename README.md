@@ -123,7 +123,7 @@
         include_new_versions: false  # true also includes revised versions of existing preprints.
       crossref:
         mailto: ${oc.env:CROSSREF_MAILTO,null} # Required when the Crossref source or abstract enrichment is enabled.
-        lookback_days: 1  # Completed UTC publication days to retrieve, ending yesterday.
+        lookback_days: 30  # Completed UTC publication days to retrieve, ending yesterday. The 30-day default mitigates OpenAlex's delayed indexing; sent-DOI deduplication keeps the overlap from being re-sent.
       openalex:
         api_keys:  # Raw keys from Secrets; null entries are skipped, at most two distinct keys.
           - ${oc.env:OPENALEX_API_KEY,null}
@@ -236,6 +236,8 @@ Configuration is composed with Hydra/OmegaConf from `config/base.yaml` (defaults
 ### OpenAlex source
 
 The `openalex` source is activated purely by listing `openalex` in `executor.source`. It retrieves papers from a built-in, exact venue catalog (a robotics/mechatronics journal expansion plus a fixed default robotics conference set, matched by exact OpenAlex source IDs and ISSNs), so its only settings are `api_keys`, `allow_anonymous`, and `lookback_days`.
+
+`lookback_days` defaults to 30 completed UTC publication days (ending yesterday). OpenAlex keeps indexing many works for days to weeks after publication, so the wide window is the mitigation for that delay: late-indexed works still get caught. The cost is overlap, since most of each 30-day window was already retrievable by earlier runs and by other sources. Within one run the DOI merge collapses that overlap; across runs, persistent sent-DOI deduplication (below) keeps the overlap from being emailed twice.
 
 Client behavior, implemented in `src/zotero_arxiv_daily/retriever/openalex_client.py`:
 
