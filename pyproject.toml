@@ -26,6 +26,7 @@ dependencies = [
     "dotenv>=0.9.9",
     "peft>=0.18.1",
     "trafilatura>=2.0.0",
+    "cryptography>=50.0.1",
 ]
 
 [tool.uv.sources]
