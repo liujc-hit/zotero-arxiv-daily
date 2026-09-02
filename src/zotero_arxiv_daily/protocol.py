@@ -54,6 +54,7 @@ class Paper:
     issns: tuple[str, ...] = ()
     is_preprint: bool | None = None
     venue_citation_proxy: float | None = None
+    journal: str | None = None
 
     def generate_tldr_and_affiliations(
         self,

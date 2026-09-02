@@ -18,7 +18,8 @@ def test_paper_metadata_defaults_preserve_existing_constructors() -> None:
     assert (
         paper.doi,
         paper.publisher,
+        paper.journal,
         paper.issns,
         paper.is_preprint,
         paper.venue_citation_proxy,
-    ) == (None, None, (), None, None)
+    ) == (None, None, None, (), None, None)
