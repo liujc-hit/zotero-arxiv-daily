@@ -32,6 +32,7 @@ jobs:
           SPRINGER_API: ${{ secrets.SPRINGER_API }}
           CROSSREF_MAILTO: ${{ vars.CROSSREF_MAILTO }}
           PUBMED_EMAIL: ${{ vars.PUBMED_EMAIL }}
+          PUBMED_QUERY: ${{ vars.PUBMED_QUERY }}
           PUBMED_ISSNS: ${{ vars.PUBMED_ISSNS || '[]' }}
           PAPER_SOURCES: ${{ vars.PAPER_SOURCES || '["arxiv","openalex"]' }}
           ABSTRACT_ENRICHMENT_ENABLED: ${{ vars.ABSTRACT_ENRICHMENT_ENABLED || 'false' }}
@@ -41,7 +42,12 @@ jobs:
           SPRINGER_ENABLED: ${{ vars.SPRINGER_ENABLED || 'false' }}
           VENUE_PRESTIGE_ENABLED: ${{ vars.VENUE_PRESTIGE_ENABLED || 'false' }}
           OPENALEX_ALLOW_ANONYMOUS: ${{ vars.OPENALEX_ALLOW_ANONYMOUS || 'false' }}
+          SENT_DOI_STATE_ENABLED: ${{ vars.SENT_DOI_STATE_ENABLED || 'false' }}
+          SENT_DOI_STATE_KEY: ${{ secrets.SENT_DOI_STATE_KEY }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
         run: |
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
-          uv run src/zotero_arxiv_daily/main.py
+          uv run --locked src/zotero_arxiv_daily/main.py \
+            '++sent_doi_state.enabled=${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED}}' \
+            '++sent_doi_state.path=.state/sent-dois.fernet' \
+            '++sent_doi_state.key=${oc.env:SENT_DOI_STATE_KEY}'
