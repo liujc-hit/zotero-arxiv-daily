@@ -18,7 +18,7 @@
 
 ---
 
-<p align="center"> Daily arxiv/biorxiv/medrxiv/chemrxiv/Crossref/OpenAlex paper recommendations based on your Zotero library, delivered by email.
+<p align="center"> Daily arxiv/biorxiv/medrxiv/chemrxiv/Crossref/OpenAlex/PubMed paper recommendations based on your Zotero library, delivered by email.
     <br> 
 </p>
 
@@ -31,7 +31,7 @@
 
 - Free daily delivery, no installation, fully automated.
 - Papers sorted by relevance to your recent reading.
-- Retrieval sources: `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, `crossref`, and `openalex` (`crossref` and `openalex` draw from a built-in robotics/mechatronics venue catalog). Up to four configured sources are retrieved concurrently and DOI duplicates are merged.
+- Retrieval sources: `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, `crossref`, `openalex`, and `pubmed` (`crossref` and `openalex` draw from a built-in robotics/mechatronics venue catalog, while `pubmed` runs whatever query you write). Up to four configured sources are retrieved concurrently and DOI duplicates are merged.
 - Optional pre-rerank abstract enrichment for published papers missing an abstract: Crossref first, then at most one of PubMed / IEEE Xplore / Elsevier / Springer Nature.
 - Optional venue prestige weighting built from OpenAlex's open citation statistics.
 - AI-generated TL;DR and resolved author affiliations for every paper in the email, through at most one strict structured LLM request per paper.
@@ -62,7 +62,7 @@
    | OPENAI_API_BASE | Yes | Base URL of the LLM API. | https://api.siliconflow.cn/v1 |
    | OPENALEX_API_KEY | When OpenAlex is enabled unless anonymous access is allowed | Primary OpenAlex identity for source retrieval and venue lookups. Raw key only; the client adds the `Bearer` prefix itself. | your-openalex-api-key |
    | OPENALEX_API_KEY_2 | No | Standby OpenAlex key, used only after the primary is rate limited. Leave unset if you have one key. | your-backup-key |
-   | NIH_API | No | PubMed (NCBI E-utilities) API key. Only needed when PubMed abstract enrichment is enabled; raises its rate cap from 3 to 10 requests/s. | your-nih-api-key |
+   | NIH_API | No | PubMed (NCBI E-utilities) API key. Optional for both the `pubmed` discovery source and PubMed abstract enrichment; raises the rate cap from 3 to 10 requests/s. | your-nih-api-key |
    | IEEE_XPLORE_API | No | IEEE Xplore API key. Only needed when IEEE abstract enrichment is enabled. | your-ieee-key |
    | ELSEVIER_API | No | Elsevier API key. Only needed when Elsevier abstract enrichment is enabled. | your-elsevier-key |
    | SPRINGER_API | No | Springer Nature metadata API key. Only needed when Springer abstract enrichment is enabled. | your-springer-key |
@@ -73,11 +73,12 @@
    | Variable | Required | Description | Example |
    | :--- | :--- | :--- | :--- |
    | CUSTOM_CONFIG | Yes | YAML configuration overlay, written to `config/custom.yaml` at run time. | see below |
-   | PAPER_SOURCES | No | JSON/YAML list string that overrides `executor.source`. Order is preserved and matters: it sets retrieval priority and decides which object wins a DOI duplicate. Default `["arxiv","openalex"]`. | `["arxiv","biorxiv","medrxiv","chemrxiv","crossref","openalex"]` |
+   | PAPER_SOURCES | No | JSON/YAML list string that overrides `executor.source`. Order is preserved and matters: it sets retrieval priority and decides which object wins a DOI duplicate. Default `["arxiv","openalex"]`. | `["arxiv","biorxiv","medrxiv","chemrxiv","crossref","openalex","pubmed"]` |
    | CROSSREF_MAILTO | No | Contact email for Crossref's polite pool. Needed whenever the `crossref` source or abstract enrichment is enabled; unset means no Crossref client and abstract enrichment is skipped with a warning. | curator@example.com |
    | ABSTRACT_ENRICHMENT_ENABLED | No | Master switch of pre-rerank abstract enrichment. Unset (and anything but `true`) resolves to `false`. | true |
-   | PUBMED_ENABLED | No | Enables the PubMed enrichment vertical. Default `false`. | true |
-   | PUBMED_EMAIL | No | Contact email identifying you to NCBI E-utilities; PubMed enrichment requires it (it is not a Secret). | curator@example.com |
+   | PUBMED_ENABLED | No | Enables the PubMed abstract enrichment vertical only. It does not enable PubMed discovery; list `pubmed` in `PAPER_SOURCES` for that. Default `false`. | true |
+   | PUBMED_EMAIL | No | Contact email identifying you to NCBI E-utilities; required by both the `pubmed` discovery source and PubMed enrichment (it is not a Secret). | curator@example.com |
+   | PUBMED_QUERY | When `pubmed` is in `PAPER_SOURCES` | PubMed search query (any PubMed search syntax) driving the `pubmed` discovery source. There is no default; if it is unset or blank while `pubmed` is a source, the run fails at startup. | robotics[Title] |
    | PUBMED_ISSNS | No | JSON/YAML list string of ISSNs; PubMed enrichment only touches papers whose ISSNs intersect this list. Default `[]` (matches nothing). | `["0028-4793","0098-7484"]` |
    | IEEE_ENABLED | No | Enables the IEEE Xplore enrichment vertical. Default `false`. | true |
    | ELSEVIER_ENABLED | No | Enables the Elsevier enrichment vertical. Default `false`. | true |
@@ -128,6 +129,12 @@
           - ${oc.env:OPENALEX_API_KEY,null}
           - ${oc.env:OPENALEX_API_KEY_2,null}
         allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}}
+      pubmed:  # Discovery source; independent of enrichment.pubmed below.
+        query: ${oc.env:PUBMED_QUERY,null} # Required when this source is enabled; there is no default query.
+        contact_email: ${oc.env:PUBMED_EMAIL,null} # Required when this source is enabled.
+        api_key: ${oc.env:NIH_API,null} # Optional; raises the effective rate cap from 3/s to 10/s.
+        lookback_days: 3  # Completed UTC entry days to retrieve, ending yesterday.
+        request_rate: 10.0  # Client-side cap; the effective rate is still 3/s anonymous, 10/s with a key.
         lookback_days: 1  # Completed UTC publication days to retrieve, ending yesterday.
 
     enrichment:
@@ -186,14 +193,14 @@
       pin_keywords: null  # Or e.g. ["Mamba", "world model"] to force-pin matching papers.
       max_pinned_num: 20
       enrich_workers: 8
-      source: ${oc.decode:${oc.env:PAPER_SOURCES,'["arxiv","biorxiv","medrxiv","chemrxiv","crossref","openalex"]'}}
+      source: ${oc.decode:${oc.env:PAPER_SOURCES,'["arxiv","openalex"]'}}
       reranker: local  # Or 'api'.
     ```
 
    With this overlay pasted, the exact Variables that turn every new feature on are:
 
     ```text
-    PAPER_SOURCES=["arxiv","biorxiv","medrxiv","chemrxiv","crossref","openalex"]
+    PAPER_SOURCES=["arxiv","biorxiv","medrxiv","chemrxiv","crossref","openalex","pubmed"]
     ABSTRACT_ENRICHMENT_ENABLED=true
     PUBMED_ENABLED=true
     IEEE_ENABLED=true
@@ -201,11 +208,12 @@
     SPRINGER_ENABLED=true
     VENUE_PRESTIGE_ENABLED=true
     CROSSREF_MAILTO=curator@example.com
+    PUBMED_QUERY=robotics[Title]
     PUBMED_EMAIL=curator@example.com
     PUBMED_ISSNS=["0028-4793","0098-7484"]
     ```
 
-   together with the provider Secrets `NIH_API`, `IEEE_XPLORE_API`, `ELSEVIER_API`, and `SPRINGER_API`. Every provider flag is independent: leaving any of them `false` (or unset) simply skips that vertical, and abstract enrichment also works with `CROSSREF_MAILTO` alone (Crossref-only). OpenAlex requires an `OPENALEX_API_KEY` Secret or `OPENALEX_ALLOW_ANONYMOUS=true` whenever `openalex` is in `PAPER_SOURCES`. `VENUE_PRESTIGE_ENABLED=true` has the same identity requirement even when `openalex` is not a source; otherwise venue weighting is skipped with a warning. The `PUBMED_ISSNS` value above is a format example (NEJM and JAMA ISSNs), not a recommendation.
+   together with the provider Secrets `NIH_API`, `IEEE_XPLORE_API`, `ELSEVIER_API`, and `SPRINGER_API`. Every provider flag is independent: leaving any of them `false` (or unset) simply skips that vertical, and abstract enrichment also works with `CROSSREF_MAILTO` alone (Crossref-only). OpenAlex requires an `OPENALEX_API_KEY` Secret or `OPENALEX_ALLOW_ANONYMOUS=true` whenever `openalex` is in `PAPER_SOURCES`. `VENUE_PRESTIGE_ENABLED=true` has the same identity requirement even when `openalex` is not a source; otherwise venue weighting is skipped with a warning. The `PUBMED_ISSNS` value above is a format example (NEJM and JAMA ISSNs), not a recommendation, and `PUBMED_QUERY=robotics[Title]` is likewise a syntax example: the query has no default, so write your own. Listing `pubmed` in `PAPER_SOURCES` is what enables PubMed discovery, and it needs `PUBMED_QUERY` plus `PUBMED_EMAIL`; `PUBMED_ENABLED` stays enrichment-only.
 
 5. Manually trigger the **Test** workflow to verify everything, then check its log and the receiver inbox.
    ![test](./assets/test.png)
@@ -236,17 +244,32 @@ Client behavior, implemented in `src/zotero_arxiv_daily/retriever/openalex_clien
 - Transport errors and 5xx responses are retried up to three total attempts on the same identity, without rotating keys.
 - Once every identity is exhausted, the run fails closed unless anonymous fallback is explicitly enabled (`OPENALEX_ALLOW_ANONYMOUS=true` / `allow_anonymous: true`), in which case keyless requests from the shared pool are the last resort.
 - A client-side sliding-window limiter caps the client at 100 request starts per second, regardless of how many keys are configured.
+### PubMed source
+
+The `pubmed` source is activated by listing `pubmed` in `executor.source`; `PUBMED_ENABLED` has nothing to do with it (that variable is enrichment-only). Unlike `crossref` and `openalex` with their fixed venue catalog, retrieval is query-driven: `source.pubmed.query` (`PUBMED_QUERY`) accepts any PubMed search syntax, has no default, and is required together with `source.pubmed.contact_email` (`PUBMED_EMAIL`, the same variable the enrichment vertical uses) whenever the source is enabled. `source.pubmed.api_key` (`NIH_API`) is optional and only raises the rate cap.
+
+Discovery, implemented in `src/zotero_arxiv_daily/retriever/pubmed_client.py`:
+
+- One ESearch with `usehistory=y` over completed UTC entry days (`source.pubmed.lookback_days`, default 3, ending yesterday, filtered by entry date), then paged EFetch of the stored History result, 200 records per page. No request is retried.
+- EFetch responses may interleave journal records (`PubmedArticle`) and book chapters (`PubmedBookArticle`); both are accepted in response order. The canonical PubMed publication type UI `D000076942` marks a record as a preprint, other explicit publication types mark it as published, and missing publication-type metadata remains unknown.
+- The fetched record count must reproduce the ESearch count and PMIDs must be unique; otherwise the source fails rather than returning a partial result.
+- Fail-closed cap: an ESearch reporting more than 10,000 records fails the source instead of silently truncating. Narrow the query or the window if you hit it.
+- The effective rate is `min(request_rate, 3/s)` without an API key and `min(request_rate, 10/s)` with one, so the default `request_rate: 10.0` means 10/s keyed and 3/s anonymous.
+- Runtime failures (request errors, the cap above, count mismatches) are isolated like any other source: logged, and that source contributes nothing while the rest still run. Bad configuration is not isolated: a blank query or contact email while `pubmed` is listed fails the whole run at startup. In debug mode (the Test workflow) the source contributes at most its first 10 records.
+
+This is History-based discovery over PubMed entry dates; `enrichment.pubmed` (below) is still DOI-to-PMID abstract enrichment. They share `NIH_API`, `PUBMED_EMAIL`, and the 3/s versus 10/s rate vocabulary, but the two features are enabled and configured independently.
+
 
 ### Concurrent retrieval and DOI merge
 
-`executor.source` (the `PAPER_SOURCES` variable) lists retrieval sources in priority order; available names are `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, `crossref`, and `openalex`. Configured sources are retrieved concurrently, at most four at a time, and each source failure is isolated: the error is logged and that source contributes nothing while the rest still run. The flattened candidate list preserves configured source order, which also decides DOI duplicates: papers sharing a normalized DOI keep the object from the earliest configured source, and the duplicate only fills fields missing on the winner (abstract, publisher, `is_preprint`, plus a normalized union of ISSNs). Papers without a valid DOI pass through untouched.
+`executor.source` (the `PAPER_SOURCES` variable) lists retrieval sources in priority order; available names are `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, `crossref`, `openalex`, and `pubmed`. Configured sources are retrieved concurrently, at most four at a time, and each source failure is isolated: the error is logged and that source contributes nothing while the rest still run. The flattened candidate list preserves configured source order, which also decides DOI duplicates: papers sharing a normalized DOI keep the object from the earliest configured source, and the duplicate only fills fields missing on the winner (abstract, publisher, journal, `is_preprint`, plus a normalized union of ISSNs). Papers without a valid DOI pass through untouched.
 
-The `crossref` source retrieves works from completed UTC publication days (`source.crossref.lookback_days`, ending yesterday) for the same built-in venue catalog as the OpenAlex source (a robotics/mechatronics journal expansion plus the fixed default robotics conference set, matched by exact ISSN). It requires a nonblank `source.crossref.mailto` (`CROSSREF_MAILTO`) and does not retry.
+The `crossref` source retrieves works from completed UTC publication days (`source.crossref.lookback_days`, ending yesterday) for the same built-in venue catalog as the OpenAlex source (a robotics/mechatronics journal expansion plus the fixed default robotics conference set, matched by exact ISSN). It requires a nonblank `source.crossref.mailto` (`CROSSREF_MAILTO`) and does not retry. The `pubmed` source instead runs your own query over completed UTC entry days (`source.pubmed.lookback_days`, default 3, ending yesterday), as described in the PubMed source section above.
 
 Effective outbound limits, enforced client-side:
 
 - Crossref (both the discovery retriever and the abstract-enrichment lookups): 10 request starts per second and at most 3 requests in flight per client; no retries.
-- PubMed enrichment: 3 requests/s anonymous, up to 10/s with `NIH_API`.
+- PubMed (both the discovery source's ESearch/EFetch and enrichment): 3 requests/s anonymous, up to 10/s with `NIH_API`; no retries.
 - Elsevier enrichment: hard-capped at 9 requests/s; once a response reports zero remaining weekly quota, further Elsevier requests are skipped for the rest of the run.
 - IEEE and Springer enrichment: conservative default of 1 request/s (`request_rate` is configurable); this project does not assert undocumented universal daily quotas for them.
 - OpenAlex Works (source retrieval): up to three attempts per request with identity failover, as described above. OpenAlex Sources (venue lookup): exactly one attempt per ISSN batch, no retry.
@@ -261,7 +284,7 @@ Each eligible paper is enriched in two steps:
 1. Crossref metadata: one `works/{doi}` lookup fills missing publisher, ISSNs, and `is_preprint` on the paper and takes the Crossref abstract when present. If Crossref returned an abstract, the paper is done.
 2. Otherwise at most one vertical adapter is selected, in the fixed priority PubMed > IEEE > Elsevier > Springer, matched by DOI prefix, publisher name, or ISSN intersection. Each provider gets exactly one attempt; there is no cross-provider retry or fallback, and a failed or empty attempt just leaves the abstract blank.
 
-PubMed is strictly a DOI-to-PMID enrichment step: it resolves the DOI to a single PMID and fetches that record, and only for papers whose ISSNs intersect `enrichment.pubmed.issns` (`PUBMED_ISSNS`). It is never a paper discovery source and never a fallback for the other providers.
+Do not confuse the vertical with the retrieval source of the same name. `enrichment.pubmed` is strictly a DOI-to-PMID abstract enrichment step: it resolves the DOI to a single PMID and fetches that record, and only for papers whose ISSNs intersect `enrichment.pubmed.issns` (`PUBMED_ISSNS`). `PUBMED_ENABLED` toggles only this enrichment; it never enables discovery and is never a fallback for the other providers. Discovery is the `source.pubmed` History ESearch/EFetch described in the PubMed source section above, turned on by listing `pubmed` in `PAPER_SOURCES`.
 
 ### Venue citation proxy weighting
 
