@@ -1,31 +1,61 @@
-"""Crossref-first and no-fallback enrichment flow contracts."""
-
-from typing import override
+"""Bounded concurrency and one-fallback enrichment flow contracts."""
 
 import pytest
-from loguru import logger
 
-from zotero_arxiv_daily.enrichment.service import AbstractEnricher
+from zotero_arxiv_daily.enrichment.service import AbstractEnricher, EnrichmentAdapters
 from zotero_arxiv_daily.enrichment.settings import (
     ElsevierSettings,
     EnrichmentSettings,
     IeeeSettings,
+    PubMedSettings,
     SpringerSettings,
 )
-from zotero_arxiv_daily.retriever.crossref_client import (
-    CrossrefOperation,
-    CrossrefTransportError,
-    JsonObject,
-)
+from zotero_arxiv_daily.protocol import Paper
 
-from .service_fakes import AdapterProbe, RecordingCrossref, blank_published_paper
+from .service_fakes import AdapterProbe, ConcurrentAdapter, blank_published_paper
+
+
+PUBMED_ISSN = "0028-0836"
+IEEE_ISSN = "0018-9219"
+ELSEVIER_ISSN = "0001-6918"
+SPRINGER_ISSN = "1432-0541"
+
+
+class UnexpectedAdapterError(RuntimeError):
+    """Unexpected adapter defect used to verify propagation."""
+
+
+def _enabled_settings() -> EnrichmentSettings:
+    return EnrichmentSettings(
+        pubmed=PubMedSettings(
+            enabled=True,
+            contact_email="curator@example.test",
+            issns=(PUBMED_ISSN,),
+        ),
+        ieee=IeeeSettings(
+            enabled=True,
+            api_key="ieee-secret",
+            issns=(IEEE_ISSN,),
+        ),
+        elsevier=ElsevierSettings(
+            enabled=True,
+            api_key="elsevier-secret",
+            issns=(ELSEVIER_ISSN,),
+        ),
+        springer=SpringerSettings(
+            enabled=True,
+            api_key="springer-secret",
+            issns=(SPRINGER_ISSN,),
+        ),
+        workers=1,
+    )
 
 
 def test_eligibility_requires_published_blank_abstract_and_present_doi() -> None:
     # Given one exact eligible paper and each excluded eligibility state
     eligible = blank_published_paper()
     eligible.abstract = " \t"
-    eligible.doi = "10.5555/eligible"
+    eligible.doi = "10.1109/eligible"
     preprint = blank_published_paper()
     preprint.doi = "10.5555/preprint"
     preprint.is_preprint = True
@@ -39,192 +69,200 @@ def test_eligibility_requires_published_blank_abstract_and_present_doi() -> None
     missing_doi.doi = None
     blank_doi = blank_published_paper()
     blank_doi.doi = " \t"
-    crossref = RecordingCrossref(lambda _doi: {"message": {}})
+    probe = AdapterProbe()
 
     # When bounded enrichment examines all candidates
     AbstractEnricher(
-        crossref,
-        EnrichmentSettings(workers=2),
-        AdapterProbe().bundle(),
+        EnrichmentSettings(
+            ieee=IeeeSettings(enabled=True, api_key="ieee-secret"),
+            workers=2,
+        ),
+        probe.bundle(),
     ).enrich([eligible, preprint, unknown, populated, missing_doi, blank_doi])
 
     # Then only exact False + stripped-blank + nonblank DOI is processed
-    assert crossref.calls == ["10.5555/eligible"]
+    assert probe.ieee.calls == ["10.1109/eligible"]
 
 
-def test_crossref_abstract_short_circuits_vertical_and_merges_missing_metadata() -> None:
-    # Given an IEEE DOI whose Crossref work contains a usable JATS abstract
-    paper = blank_published_paper()
-    paper.doi = "10.1109/crossref-first"
-    crossref = RecordingCrossref(
-        lambda _doi: {
-            "message": {
-                "abstract": "<jats:p>Crossref <jats:b>abstract</jats:b>.</jats:p>",
-                "publisher": "Crossref Publisher",
-                "ISSN": ["0028-0836"],
-                "type": "posted-content",
-            }
-        }
-    )
+def test_constructor_needs_only_settings_when_adapters_are_not_injected() -> None:
+    # Given default enrichment settings and no external service client
+    enricher = AbstractEnricher(EnrichmentSettings())
+
+    # When no papers require enrichment
+    result = enricher.enrich([])
+
+    # Then construction and the no-work path complete without another dependency
+    assert result is None
+
+
+def test_max_papers_bounds_eligible_work_without_reordering_or_replacing() -> None:
+    # Given one ineligible paper followed by four eligible IEEE papers
+    ineligible = blank_published_paper()
+    ineligible.doi = "10.1109/existing"
+    ineligible.abstract = "Existing abstract"
+    papers = [ineligible]
+    for index in range(4):
+        paper = blank_published_paper()
+        paper.doi = f"10.1109/{index}"
+        papers.append(paper)
+    identities = tuple(id(paper) for paper in papers)
     probe = AdapterProbe()
     settings = EnrichmentSettings(
         ieee=IeeeSettings(enabled=True, api_key="ieee-secret"),
         workers=1,
+        max_papers=2,
     )
 
-    # When enrichment runs
-    AbstractEnricher(crossref, settings, probe.bundle()).enrich([paper])
+    # When enrichment applies its eligible-paper bound
+    result = AbstractEnricher(settings, probe.bundle()).enrich(papers)
 
-    # Then Crossref fills missing fields, preserves known status, and stops routing
-    assert paper.abstract == "Crossref abstract."
-    assert (paper.publisher, paper.issns, paper.is_preprint) == (
-        "Crossref Publisher",
-        ("0028-0836",),
-        False,
-    )
-    assert probe.ieee.calls == []
-    assert crossref.calls == ["10.1109/crossref-first"]
+    # Then only the first two eligible objects are mutated in input order
+    assert result is None
+    assert tuple(id(paper) for paper in papers) == identities
+    assert probe.ieee.calls == ["10.1109/0", "10.1109/1"]
+    assert [paper.abstract for paper in papers] == [
+        "Existing abstract",
+        "ieee abstract",
+        "ieee abstract",
+        "",
+        "",
+    ]
 
 
-def test_crossref_never_overwrites_present_publication_metadata() -> None:
-    # Given a paper whose publication metadata is already known
+@pytest.mark.parametrize(
+    ("workers", "max_papers"),
+    [(0, 5), (-1, 5), (2, 0), (2, -1)],
+)
+def test_nonpositive_bounds_process_no_papers(workers: int, max_papers: int) -> None:
+    # Given a routable paper but a nonpositive worker or paper bound
     paper = blank_published_paper()
-    paper.publisher = "Original Publisher"
-    paper.issns = ("2049-3630",)
-    crossref = RecordingCrossref(
-        lambda _doi: {
-            "message": {
-                "publisher": "Replacement Publisher",
-                "ISSN": ["0028-0836"],
-                "type": "preprint",
-            }
-        }
-    )
+    paper.doi = "10.1109/disabled"
+    probe = AdapterProbe()
 
-    # When Crossref metadata is merged
+    # When bounded enrichment is disabled
     AbstractEnricher(
-        crossref,
-        EnrichmentSettings(workers=1),
-        AdapterProbe().bundle(),
-    ).enrich([paper])
-
-    # Then publisher, ISSNs, and explicit published status remain unchanged
-    assert (paper.publisher, paper.issns, paper.is_preprint) == (
-        "Original Publisher",
-        ("2049-3630",),
-        False,
-    )
-
-
-def test_crossref_metadata_can_supply_positive_vertical_evidence() -> None:
-    # Given an otherwise unroutable paper whose Crossref publisher is Elsevier
-    paper = blank_published_paper()
-    crossref = RecordingCrossref(
-        lambda _doi: {
-            "message": {
-                "publisher": "Elsevier B.V.",
-                "ISSN": ["0001-6918"],
-                "abstract": " ",
-            }
-        }
-    )
-    probe = AdapterProbe()
-    settings = EnrichmentSettings(
-        elsevier=ElsevierSettings(enabled=True, api_key="elsevier-secret"),
-        workers=1,
-    )
-
-    # When Crossref-first routing runs
-    AbstractEnricher(crossref, settings, probe.bundle()).enrich([paper])
-
-    # Then merged publisher evidence selects only Elsevier
-    assert paper.publisher == "Elsevier B.V."
-    assert paper.issns == ("0001-6918",)
-    assert probe.elsevier.calls == ["10.5555/example"]
-    assert paper.abstract == "elsevier abstract"
-
-
-def test_crossref_failure_continues_from_existing_paper_metadata() -> None:
-    # Given a known IEEE DOI and a typed Crossref transport failure
-    paper = blank_published_paper()
-    paper.doi = "10.1109/existing"
-
-    def fail(_doi: str) -> JsonObject:
-        raise CrossrefTransportError(CrossrefOperation.GET_WORK)
-
-    crossref = RecordingCrossref(fail)
-    probe = AdapterProbe()
-    settings = EnrichmentSettings(
-        ieee=IeeeSettings(enabled=True, api_key="ieee-secret"),
-        workers=1,
-    )
-
-    # When enrichment handles the failed Crossref call
-    AbstractEnricher(crossref, settings, probe.bundle()).enrich([paper])
-
-    # Then Crossref is not a routing gate and IEEE is attempted once
-    assert crossref.calls == ["10.1109/existing"]
-    assert probe.ieee.calls == ["10.1109/existing"]
-    assert paper.abstract == "ieee abstract"
-
-
-@pytest.mark.parametrize("provider_result", [None, " \t"], ids=["failure", "blank"])
-def test_chosen_vertical_failure_or_blank_never_falls_through(
-    provider_result: str | None,
-) -> None:
-    # Given Elsevier-priority evidence plus lower-priority Springer evidence
-    paper = blank_published_paper()
-    paper.doi = "10.1016/no-fallback"
-    paper.publisher = "Springer Nature"
-    probe = AdapterProbe()
-    probe.elsevier.result = provider_result
-    settings = EnrichmentSettings(
-        elsevier=ElsevierSettings(enabled=True, api_key="elsevier-secret"),
-        springer=SpringerSettings(enabled=True, api_key="springer-secret"),
-        workers=1,
-    )
-
-    # When the chosen Elsevier adapter cannot supply a usable abstract
-    AbstractEnricher(
-        RecordingCrossref(lambda _doi: {"message": {}}),
-        settings,
+        EnrichmentSettings(
+            ieee=IeeeSettings(enabled=True, api_key="ieee-secret"),
+            workers=workers,
+            max_papers=max_papers,
+        ),
         probe.bundle(),
     ).enrich([paper])
 
-    # Then no other database is attempted
-    assert probe.elsevier.calls == ["10.1016/no-fallback"]
+    # Then no adapter work starts
+    assert probe.attempts == []
+
+
+def test_workers_process_papers_concurrently_through_one_shared_adapter() -> None:
+    # Given four eligible papers and one adapter synchronized in worker pairs
+    papers: list[Paper] = []
+    for index in range(4):
+        paper = blank_published_paper()
+        paper.doi = f"10.1109/concurrent-{index}"
+        papers.append(paper)
+    shared_ieee = ConcurrentAdapter(parties=2)
+    unused = AdapterProbe()
+    adapters = EnrichmentAdapters(
+        pubmed=unused.pubmed,
+        ieee=shared_ieee,
+        elsevier=unused.elsevier,
+        springer=unused.springer,
+    )
+
+    # When two workers enrich papers through that shared provider adapter
+    AbstractEnricher(
+        EnrichmentSettings(
+            ieee=IeeeSettings(enabled=True, api_key="ieee-secret"),
+            workers=2,
+            max_papers=4,
+        ),
+        adapters,
+    ).enrich(papers)
+
+    # Then papers overlap, the worker cap holds, and every paper is enriched
+    assert shared_ieee.max_active == 2
+    assert sorted(shared_ieee.calls) == [
+        "10.1109/concurrent-0",
+        "10.1109/concurrent-1",
+        "10.1109/concurrent-2",
+        "10.1109/concurrent-3",
+    ]
+    assert [paper.abstract for paper in papers] == ["concurrent abstract"] * 4
+
+
+def test_primary_success_stops_without_attempting_a_matched_alternate() -> None:
+    # Given IEEE publisher evidence overlapping a configured PubMed ISSN
+    paper = blank_published_paper()
+    paper.publisher = "IEEE Computer Society"
+    paper.issns = (PUBMED_ISSN,)
+    probe = AdapterProbe()
+    probe.ieee.result = "  primary abstract \t"
+
+    # When the primary returns a usable abstract
+    AbstractEnricher(_enabled_settings(), probe.bundle()).enrich([paper])
+
+    # Then the normalized primary result stops the per-paper route
+    assert probe.attempts == ["ieee"]
+    assert paper.abstract == "primary abstract"
+
+
+@pytest.mark.parametrize("primary_result", [None, " \t"], ids=["none", "blank"])
+def test_primary_none_or_blank_falls_back_once_to_next_unique_match(
+    primary_result: str | None,
+) -> None:
+    # Given three IEEE signals plus one lower-priority PubMed ISSN signal
+    paper = blank_published_paper()
+    paper.doi = "10.1109/fallback"
+    paper.publisher = "IEEE Computer Society"
+    paper.issns = (IEEE_ISSN, PUBMED_ISSN)
+    probe = AdapterProbe()
+    probe.ieee.result = primary_result
+
+    # When the primary cannot supply a usable abstract
+    AbstractEnricher(_enabled_settings(), probe.bundle()).enrich([paper])
+
+    # Then IEEE is not duplicated and exactly one PubMed fallback succeeds
+    assert probe.attempts == ["ieee", "pubmed"]
+    assert probe.ieee.calls == ["10.1109/fallback"]
+    assert probe.pubmed.calls == ["10.1109/fallback"]
+    assert paper.abstract == "pubmed abstract"
+
+
+def test_only_first_two_matches_are_attempted_when_both_return_blank() -> None:
+    # Given positive signals for all four providers in priority order
+    paper = blank_published_paper()
+    paper.doi = "10.1109/two-attempt-limit"
+    paper.publisher = "Elsevier Springer Nature"
+    paper.issns = (PUBMED_ISSN,)
+    probe = AdapterProbe()
+    probe.ieee.result = None
+    probe.elsevier.result = " \t"
+
+    # When both admitted routes fail to supply a usable abstract
+    AbstractEnricher(_enabled_settings(), probe.bundle()).enrich([paper])
+
+    # Then IEEE and Elsevier are the only attempts; no third route runs
+    assert probe.attempts == ["ieee", "elsevier"]
     assert probe.springer.calls == []
     assert probe.pubmed.calls == []
     assert paper.abstract == ""
 
 
-def test_crossref_failure_log_never_renders_exception_or_doi() -> None:
-    # Given a typed failure whose string form contains private data
-    private = "10.1109/private secret exception detail"
-
-    class SensitiveTransportError(CrossrefTransportError):
-        @override
-        def __str__(self) -> str:
-            return private
-
-    def fail(_doi: str) -> JsonObject:
-        raise SensitiveTransportError(CrossrefOperation.GET_WORK)
-
+def test_unexpected_adapter_exception_propagates_without_fallback() -> None:
+    # Given a matched primary that raises and a positively matched alternate
     paper = blank_published_paper()
-    paper.doi = "10.1109/private"
-    rendered: list[str] = []
-    sink = logger.add(rendered.append, format="{message}")
-    try:
-        # When the service handles the Crossref failure
-        AbstractEnricher(
-            RecordingCrossref(fail),
-            EnrichmentSettings(workers=1),
-            AdapterProbe().bundle(),
-        ).enrich([paper])
-    finally:
-        logger.remove(sink)
+    paper.doi = "10.1109/unexpected"
+    paper.issns = (PUBMED_ISSN,)
+    probe = AdapterProbe()
+    failure = UnexpectedAdapterError("adapter defect")
+    probe.ieee.error = failure
 
-    # Then only provider, operation, and failure category are observable
-    log_text = "".join(rendered)
-    assert "Crossref get_work transport failure" in log_text
-    assert private not in log_text
+    # When enrichment reaches the defective primary adapter
+    with pytest.raises(UnexpectedAdapterError) as raised:
+        AbstractEnricher(_enabled_settings(), probe.bundle()).enrich([paper])
+
+    # Then the original error escapes and no alternate is attempted
+    assert raised.value is failure
+    assert probe.attempts == ["ieee"]
+    assert probe.pubmed.calls == []
+    assert paper.abstract == ""
