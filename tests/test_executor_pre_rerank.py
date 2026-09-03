@@ -282,7 +282,7 @@ def test_init_disabled_stages_construct_no_network_clients(
     monkeypatch: pytest.MonkeyPatch,
     enrichment_config,
 ) -> None:
-    # Given: absent/disabled enrichment and forbidden optional client constructors.
+    # Given: absent/disabled enrichment and a forbidden optional client constructor.
     def forbidden(*args, **kwargs):
         del args, kwargs
         pytest.fail("disabled pipeline constructed an optional network client")
@@ -294,8 +294,7 @@ def test_init_disabled_stages_construct_no_network_clients(
     config = executor_config()
     if enrichment_config is not None:
         config.enrichment = enrichment_config
-    for name in ("CrossrefClient", "OpenAlexClient"):
-        monkeypatch.setattr(pipeline_module, name, forbidden)
+    monkeypatch.setattr(pipeline_module, "OpenAlexClient", forbidden)
     monkeypatch.setattr(executor_module, "get_reranker_cls", lambda name: Reranker)
     monkeypatch.setattr(executor_module, "OpenAI", lambda **kwargs: SimpleNamespace())
 

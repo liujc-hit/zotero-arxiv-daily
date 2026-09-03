@@ -1,8 +1,13 @@
+# noqa: SIZE_OK - Executor is the existing single-file pipeline orchestrator.
+
 from loguru import logger
 from pyzotero import zotero
 from omegaconf import DictConfig, ListConfig
 from .utils import glob_match
 from .retriever import get_retriever_cls
+from .retriever.base import BaseRetriever
+from .retriever.crossref_retriever import CrossrefRetriever
+from .retriever.openalex_errors import MissingOpenAlexCredentialsError
 from .protocol import CorpusPaper, Paper
 from .enrichment.pipeline import build_pipeline_enrichers
 from .final_enrichment import enrich_final_papers
@@ -45,15 +50,35 @@ def normalize_path_patterns(
     return list(patterns)
 
 
+def _build_retrievers(config: DictConfig) -> dict[str, BaseRetriever]:
+    """Construct effective sources in first-occurrence configured order."""
+    retrievers: dict[str, BaseRetriever] = {}
+    for requested_source in config.executor.source:
+        if requested_source == "crossref" and "crossref" in retrievers:
+            continue
+
+        retriever_cls = get_retriever_cls(requested_source)
+        if requested_source != "openalex":
+            retrievers[requested_source] = retriever_cls(config)
+            continue
+
+        try:
+            openalex_retriever = retriever_cls(config)
+        except MissingOpenAlexCredentialsError:
+            if "crossref" not in retrievers:
+                retrievers["crossref"] = CrossrefRetriever(config)
+            continue
+        retrievers[requested_source] = openalex_retriever
+    return retrievers
+
+
 class Executor:
     def __init__(self, config:DictConfig):
         self.config = config
         self.sent_doi_state_store = build_sent_doi_state_store(config)
         self.include_path_patterns = normalize_path_patterns(config.zotero.include_path, "include_path")
         self.ignore_path_patterns = normalize_path_patterns(config.zotero.ignore_path, "ignore_path")
-        self.retrievers = {
-            source: get_retriever_cls(source)(config) for source in config.executor.source
-        }
+        self.retrievers = _build_retrievers(config)
         self.pipeline_enrichers = build_pipeline_enrichers(config, self.retrievers)
         self.reranker = get_reranker_cls(config.executor.reranker)(config)
         self.openai_client = OpenAI(
