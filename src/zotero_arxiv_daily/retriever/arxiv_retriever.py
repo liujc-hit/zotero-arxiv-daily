@@ -87,13 +87,14 @@ def _extract_text_from_pdf_worker(pdf_url: str) -> str:
 def _extract_text_from_html_worker(html_url: str) -> str | None:
     import trafilatura
 
-    downloaded = trafilatura.fetch_url(html_url)
-    if downloaded is None:
-        raise ValueError(f"Failed to download HTML from {html_url}")
-    text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
-    if not text:
-        raise ValueError(f"No text extracted from {html_url}")
-    return text
+    response = trafilatura.fetch_response(html_url, decode=True)
+    if response is None or response.status != 200 or not response.html:
+        return None
+    return trafilatura.extract(
+        response.html,
+        include_comments=False,
+        include_tables=False,
+    )
 
 
 def _extract_text_from_tar_worker(source_url: str, paper_id: str, paper_title: str | None = None) -> str | None:
@@ -102,7 +103,7 @@ def _extract_text_from_tar_worker(source_url: str, paper_id: str, paper_title: s
         _download_file(source_url, path)
         file_contents = extract_tex_code_from_tar(path, paper_id, paper_title=paper_title)
         if not file_contents or "all" not in file_contents:
-            raise ValueError("Main tex file not found.")
+            return None
         return file_contents["all"]
 
 
@@ -217,7 +218,7 @@ def fetch_arxiv_full_text(
         if text:
             return text
     except Exception as exc:
-        logger.warning(f"HTML extraction failed for {title}: {exc}")
+        logger.debug(f"HTML extraction failed for {title}: {exc}")
 
     # 3. PDF fallback
     if pdf_url is not None:

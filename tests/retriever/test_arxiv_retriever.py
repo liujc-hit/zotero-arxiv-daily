@@ -4,6 +4,8 @@ import time
 from types import SimpleNamespace
 
 import feedparser
+import pytest
+import trafilatura
 
 from zotero_arxiv_daily.retriever.arxiv_retriever import ArxivRetriever, _run_with_hard_timeout
 import zotero_arxiv_daily.retriever.arxiv_retriever as arxiv_retriever
@@ -90,3 +92,81 @@ def test_run_with_hard_timeout_returns_none_on_failure(monkeypatch):
     )
     assert result is None
     assert "boom" in warnings[0]
+
+
+def test_tar_worker_returns_none_when_source_has_no_tex(monkeypatch):
+    # Given a downloaded arXiv source payload that contains no usable TeX.
+    monkeypatch.setattr(arxiv_retriever, "_download_file", lambda *_: None)
+    monkeypatch.setattr(
+        arxiv_retriever,
+        "extract_tex_code_from_tar",
+        lambda *_args, **_kwargs: None,
+    )
+
+    # When source extraction runs, then the expected miss is returned normally.
+    result = arxiv_retriever._extract_text_from_tar_worker(
+        "https://arxiv.org/src/2609.02003v1",
+        "2609.02003v1",
+        "PDF-only submission",
+    )
+
+    assert result is None
+
+
+def test_html_worker_returns_none_when_rendering_is_not_found(monkeypatch):
+    # Given an arXiv paper without an HTML rendering.
+    response = SimpleNamespace(status=404, html=None)
+    monkeypatch.setattr(
+        trafilatura,
+        "fetch_response",
+        lambda _url, *, decode: response,
+    )
+    monkeypatch.setattr(trafilatura, "fetch_url", lambda _url: None)
+    monkeypatch.setattr(
+        trafilatura,
+        "extract",
+        lambda *_args, **_kwargs: pytest.fail("404 response must not be extracted"),
+    )
+
+    # When optional HTML extraction runs, then the miss is returned normally.
+    result = arxiv_retriever._extract_text_from_html_worker(
+        "https://arxiv.org/html/2609.02003v1"
+    )
+
+    assert result is None
+
+
+def test_fetch_full_text_does_not_warn_when_pdf_fallback_succeeds(monkeypatch):
+    # Given unavailable source and HTML stages followed by successful PDF text.
+    stage_results = iter((None, "PDF text"))
+    warnings: list[str] = []
+    debug_messages: list[str] = []
+
+    def unavailable_html(_url: str) -> None:
+        raise ConnectionError("HTML unavailable")
+
+    monkeypatch.setattr(
+        arxiv_retriever,
+        "_run_with_hard_timeout",
+        lambda *_args, **_kwargs: next(stage_results),
+    )
+    monkeypatch.setattr(
+        arxiv_retriever,
+        "_extract_text_from_html_worker",
+        unavailable_html,
+    )
+    monkeypatch.setattr(
+        arxiv_retriever,
+        "logger",
+        SimpleNamespace(warning=warnings.append, debug=debug_messages.append),
+    )
+
+    # When full-text extraction falls through to PDF, then it is not a warning.
+    result = arxiv_retriever.fetch_arxiv_full_text(
+        "https://arxiv.org/abs/2609.02003v1",
+        "https://arxiv.org/pdf/2609.02003v1",
+        "PDF-only submission",
+    )
+
+    assert result == "PDF text"
+    assert warnings == []
