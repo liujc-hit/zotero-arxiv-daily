@@ -23,6 +23,7 @@ dependencies = [
     "arxiv>=2.4.0",
     "pymupdf4llm>=0.3.4",
     "pymupdf-layout>=1.27.1",
+    "onnxruntime>=1.29.0,<1.30.0",
     "dotenv>=0.9.9",
     "peft>=0.18.1",
     "trafilatura>=2.0.0",
