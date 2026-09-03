@@ -69,7 +69,7 @@ jobs:
           export DEBUG=true
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           uv run --locked src/zotero_arxiv_daily/main.py \
-            '++sent_doi_state.enabled=${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED}}' \
+            '++sent_doi_state.enabled="${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED}}"' \
             '++sent_doi_state.path=.state/sent-dois.fernet' \
             '++sent_doi_state.key=${oc.env:SENT_DOI_STATE_KEY}'
 

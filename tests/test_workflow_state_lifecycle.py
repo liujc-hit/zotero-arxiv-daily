@@ -143,7 +143,10 @@ def test_app_uses_only_the_local_encrypted_state_path(workflow_name: str) -> Non
     assert isinstance(command, str)
 
     # When Hydra overrides are inspected, then state is env-gated and local only.
-    assert "'++sent_doi_state.enabled=${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED}}'" in command
+    assert (
+        "'++sent_doi_state.enabled=\"${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED}}\"'"
+        in command
+    )
     assert f"'++sent_doi_state.path={_STATE_PATH}'" in command
     assert "'++sent_doi_state.key=${oc.env:SENT_DOI_STATE_KEY}'" in command
     assert "uv run --locked src/zotero_arxiv_daily/main.py" in command
