@@ -4,6 +4,8 @@ import re
 from typing import Final
 
 import pytest
+from hydra.core.override_parser.overrides_parser import OverridesParser
+from omegaconf import OmegaConf
 
 from .workflow_config_support import (
     SCRIPT_DIR,
@@ -136,17 +138,28 @@ def test_workflows_share_identical_state_lifecycle_order_and_actions() -> None:
 
 
 @pytest.mark.parametrize("workflow_name", WORKFLOW_NAMES)
-def test_app_uses_only_the_local_encrypted_state_path(workflow_name: str) -> None:
+def test_app_uses_only_the_local_encrypted_state_path(
+    workflow_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Given the application step after state loading.
     run_step = named_step(workflow_name, "Run script")
     command = run_step["run"]
     assert isinstance(command, str)
+    enabled_override = re.search(
+        r"'(\+\+sent_doi_state\.enabled=[^']+)'",
+        command,
+    )
+    assert enabled_override is not None
+    monkeypatch.setenv("SENT_DOI_STATE_ENABLED", "false")
 
     # When Hydra overrides are inspected, then state is env-gated and local only.
-    assert (
-        "'++sent_doi_state.enabled=\"${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED}}\"'"
-        in command
+    parsed_override = OverridesParser.create().parse_override(
+        enabled_override.group(1),
     )
+    resolved = OmegaConf.create({"enabled": parsed_override.value()})
+
+    assert OmegaConf.to_container(resolved, resolve=True) == {"enabled": False}
     assert f"'++sent_doi_state.path={_STATE_PATH}'" in command
     assert "'++sent_doi_state.key=${oc.env:SENT_DOI_STATE_KEY}'" in command
     assert "uv run --locked src/zotero_arxiv_daily/main.py" in command
