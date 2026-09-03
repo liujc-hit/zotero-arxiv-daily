@@ -13,8 +13,6 @@ from zotero_arxiv_daily.enrichment.pipeline import (
     build_pipeline_enrichers,
 )
 from zotero_arxiv_daily.enrichment.settings import EnrichmentSettings
-from zotero_arxiv_daily.retriever.crossref_client import CrossrefClient, JsonObject
-from zotero_arxiv_daily.retriever.crossref_retriever import CrossrefRetriever
 from zotero_arxiv_daily.retriever.openalex_client import (
     JsonValue,
     OpenAlexClient,
@@ -23,7 +21,6 @@ from zotero_arxiv_daily.retriever.openalex_client import (
 from zotero_arxiv_daily.retriever.openalex_retriever import OpenAlexRetriever
 
 from .pipeline_fakes import (
-    CONTACT,
     OPENALEX_KEY,
     FailingVenue,
     RecordingStage,
@@ -50,11 +47,10 @@ def _forbidden_constructor(*args: Never, **kwargs: Never) -> Never:
 )
 def test_disabled_config_constructs_no_clients_or_enrichers(
     monkeypatch: pytest.MonkeyPatch,
-    root: JsonObject,
+    root: dict[str, object],
 ) -> None:
     # Given every disabled boundary and constructors that fail if touched.
     for name in (
-        "CrossrefClient",
         "OpenAlexClient",
         "AbstractEnricher",
         "VenueCitationEnricher",
@@ -73,12 +69,12 @@ def test_disabled_config_constructs_no_clients_or_enrichers(
     "abstract_config",
     [pytest.param(None, id="absent"), pytest.param({"enabled": False}, id="disabled")],
 )
-def test_venue_only_config_builds_without_crossref(
+def test_venue_only_config_builds_only_venue_stage(
     monkeypatch: pytest.MonkeyPatch,
-    abstract_config: JsonObject | None,
+    abstract_config: dict[str, object] | None,
 ) -> None:
     # Given enabled venue weighting and OpenAlex identity without abstract opt-in.
-    root: JsonObject = {
+    root: dict[str, object] = {
         "source": {
             "openalex": {
                 "api_keys": [OPENALEX_KEY],
@@ -95,39 +91,30 @@ def test_venue_only_config_builds_without_crossref(
     }
     if abstract_config is not None:
         root["enrichment"] = abstract_config
-    monkeypatch.setattr(pipeline_module, "CrossrefClient", _forbidden_constructor)
     monkeypatch.setattr(pipeline_module, "AbstractEnricher", _forbidden_constructor)
-    rendered: list[str] = []
-    sink = logger.add(rendered.append, format="{message}")
-    try:
-        # When independently optional stages are built.
-        enrichers = build_pipeline_enrichers(OmegaConf.create(root), {})
-    finally:
-        logger.remove(sink)
 
-    # Then only venue enrichment exists and abstract unavailability is not warned.
+    # When independently optional stages are built.
+    enrichers = build_pipeline_enrichers(OmegaConf.create(root), {})
+
+    # Then only venue enrichment exists.
     assert enrichers.abstract is None
     assert enrichers.venue_citation is not None
-    assert "Crossref" not in "".join(rendered)
 
 
-def test_configured_retriever_clients_are_read_only_and_reused(
+def test_enabled_abstract_uses_settings_and_reuses_configured_openalex_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given configured retrievers that already own one client each.
+    # Given enabled stages and an OpenAlex retriever that already owns its client.
     config = enabled_config()
-    crossref = CrossrefRetriever(config)
     openalex = OpenAlexRetriever(config)
-    crossref_clients: list[CrossrefClient] = []
+    abstract_settings: list[EnrichmentSettings] = []
     openalex_clients: list[OpenAlexClient] = []
     stage_calls: list[tuple[str, int, tuple[int, ...]]] = []
 
     def recording_abstract(
-        client: CrossrefClient,
         settings: EnrichmentSettings,
     ) -> RecordingStage:
-        del settings
-        crossref_clients.append(client)
+        abstract_settings.append(settings)
         return RecordingStage("abstract", stage_calls)
 
     def recording_venue(
@@ -139,43 +126,30 @@ def test_configured_retriever_clients_are_read_only_and_reused(
         openalex_clients.append(client)
         return RecordingStage("venue", stage_calls)
 
-    monkeypatch.setattr(pipeline_module, "CrossrefClient", _forbidden_constructor)
     monkeypatch.setattr(pipeline_module, "OpenAlexClient", _forbidden_constructor)
     monkeypatch.setattr(pipeline_module, "AbstractEnricher", recording_abstract)
     monkeypatch.setattr(pipeline_module, "VenueCitationEnricher", recording_venue)
 
-    # When the pipeline is built from the configured retriever mapping.
+    # When the pipeline is built without any abstract retrieval identity.
     enrichers = build_pipeline_enrichers(
         config,
-        {"crossref": crossref, "openalex": openalex},
+        {"openalex": openalex},
     )
     enrichers.enrich_before_rerank([])
 
-    # Then no duplicate client is built and both properties reject assignment.
-    assert crossref_clients == [crossref.client]
+    # Then abstract construction receives only settings and OpenAlex reuses its client.
+    assert abstract_settings == [EnrichmentSettings()]
     assert openalex_clients == [openalex.client]
-    with pytest.raises(AttributeError):
-        setattr(crossref, "client", crossref.client)
     with pytest.raises(AttributeError):
         setattr(openalex, "client", openalex.client)
 
 
-def test_missing_retrievers_construct_each_needed_client_once(
+def test_missing_openalex_retriever_constructs_needed_client_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given enabled stages, source identities, and no configured retrievers.
+    # Given enabled stages, OpenAlex identity, and no configured retriever.
     config = enabled_config()
-    crossref_contacts: list[str] = []
     openalex_identities: list[tuple[tuple[str, ...], bool]] = []
-
-    @final
-    class RecordingCrossrefClient:
-        def __init__(self, mailto: str) -> None:
-            crossref_contacts.append(mailto)
-
-        def get_work(self, doi: str) -> JsonObject:
-            del doi
-            return {"message": {}}
 
     @final
     class RecordingOpenAlexClient:
@@ -191,37 +165,34 @@ def test_missing_retrievers_construct_each_needed_client_once(
             del params
             return {"results": []}
 
-    monkeypatch.setattr(pipeline_module, "CrossrefClient", RecordingCrossrefClient)
+    def recording_abstract(settings: EnrichmentSettings) -> RecordingStage:
+        del settings
+        return RecordingStage("abstract", [])
+
+    monkeypatch.setattr(pipeline_module, "AbstractEnricher", recording_abstract)
     monkeypatch.setattr(pipeline_module, "OpenAlexClient", RecordingOpenAlexClient)
 
     # When one pipeline is built.
     enrichers = build_pipeline_enrichers(config, {})
     enrichers.enrich_before_rerank([])
 
-    # Then each required client is normalized and constructed exactly once.
-    assert crossref_contacts == [CONTACT]
+    # Then the required OpenAlex client is normalized and constructed exactly once.
     assert openalex_identities == [((OPENALEX_KEY,), False)]
 
 
-@pytest.mark.parametrize("unavailable", ["crossref", "openalex"])
-def test_unavailable_identity_disables_only_its_stage_with_static_warning(
+def test_unavailable_openalex_identity_disables_only_venue_with_static_warning(
     monkeypatch: pytest.MonkeyPatch,
-    unavailable: str,
 ) -> None:
-    # Given one unavailable identity while the other enrichment stage is valid.
+    # Given enabled stages without usable OpenAlex identity.
     config = enabled_config()
-    if unavailable == "crossref":
-        OmegaConf.update(config, "source.crossref.mailto", " \t")
-    else:
-        OmegaConf.update(config, "source.openalex.api_keys", [None, " "])
+    OmegaConf.update(config, "source.openalex.api_keys", [None, " "])
     calls: list[str] = []
     stage_calls: list[tuple[str, int, tuple[int, ...]]] = []
 
     def recording_abstract(
-        client: CrossrefClient,
         settings: EnrichmentSettings,
     ) -> RecordingStage:
-        del client, settings
+        del settings
         calls.append("abstract")
         return RecordingStage("abstract", stage_calls)
 
@@ -245,12 +216,10 @@ def test_unavailable_identity_disables_only_its_stage_with_static_warning(
     finally:
         logger.remove(sink)
 
-    # Then only the unavailable stage is disabled and one safe warning explains it.
-    expected = ["venue"] if unavailable == "crossref" else ["abstract"]
-    assert calls == expected
+    # Then only venue construction is disabled and one safe warning explains it.
+    assert calls == ["abstract"]
     log_text = "".join(rendered)
-    assert unavailable.casefold() in log_text.casefold()
-    assert CONTACT not in log_text
+    assert "openalex" in log_text.casefold()
     assert OPENALEX_KEY not in log_text
 
 

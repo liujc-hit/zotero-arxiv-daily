@@ -185,7 +185,6 @@ def test_existing_default_fixture_builds_no_optional_services(
     for name in FEATURE_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     for constructor_name in (
-        "CrossrefClient",
         "OpenAlexClient",
         "AbstractEnricher",
         "VenueCitationEnricher",

@@ -7,7 +7,6 @@ from omegaconf import DictConfig, OmegaConf
 from zotero_arxiv_daily.protocol import Paper
 
 
-CONTACT: Final = "runtime-crossref@example.test"
 OPENALEX_KEY: Final = "runtime-openalex-secret"
 
 
@@ -16,7 +15,6 @@ def enabled_config() -> DictConfig:
         {
             "enrichment": {"enabled": True},
             "source": {
-                "crossref": {"mailto": CONTACT, "lookback_days": 1},
                 "openalex": {
                     "api_keys": [OPENALEX_KEY],
                     "allow_anonymous": False,

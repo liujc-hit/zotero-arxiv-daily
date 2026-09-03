@@ -11,8 +11,6 @@ from omegaconf.errors import OmegaConfBaseException
 from ..protocol import Paper
 from ..reranker.venue_citation_weighting import resolve_venue_citation_weighting
 from ..retriever.base import BaseRetriever
-from ..retriever.crossref_client import CrossrefClient
-from ..retriever.crossref_retriever import CrossrefRetriever
 from ..retriever.openalex_client import OpenAlexClient, OpenAlexClientError
 from ..retriever.openalex_retriever import OpenAlexRetriever
 from .config import InvalidEnrichmentConfigurationError, resolve_enrichment_settings
@@ -31,9 +29,6 @@ type _ConfigValue = (
     | ListConfig
 )
 
-_ABSTRACT_IDENTITY_WARNING: Final = (
-    "Crossref identity unavailable; abstract enrichment disabled"
-)
 _VENUE_IDENTITY_WARNING: Final = (
     "OpenAlex identity unavailable; venue citation enrichment disabled"
 )
@@ -113,18 +108,6 @@ def _source_section(config: DictConfig, name: str) -> DictConfig | None:
     return section
 
 
-def _crossref_mailto(config: DictConfig) -> str | None:
-    section = _source_section(config, "crossref")
-    if section is None:
-        return None
-    value = _read(section, "mailto", None)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        _invalid()
-    return value.strip() or None
-
-
 def _openalex_identity(config: DictConfig) -> _OpenAlexIdentity | None:
     section = _source_section(config, "openalex")
     if section is None:
@@ -182,16 +165,7 @@ def build_pipeline_enrichers(
     settings = resolve_enrichment_settings(config)
     abstract: _PaperEnricher | None = None
     if settings is not None:
-        crossref_retriever = retrievers.get("crossref")
-        if isinstance(crossref_retriever, CrossrefRetriever):
-            crossref_client = crossref_retriever.client
-        else:
-            mailto = _crossref_mailto(config)
-            crossref_client = CrossrefClient(mailto) if mailto is not None else None
-        if crossref_client is None:
-            logger.warning(_ABSTRACT_IDENTITY_WARNING)
-        else:
-            abstract = AbstractEnricher(crossref_client, settings)
+        abstract = AbstractEnricher(settings)
 
     venue_citation: _PaperEnricher | None = None
     weighting = resolve_venue_citation_weighting(config)
