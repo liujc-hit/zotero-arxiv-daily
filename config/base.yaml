@@ -15,11 +15,11 @@ source:
   chemrxiv:
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
   crossref:
-    mailto: null # Contact email for polite Crossref API access. Required only when the Crossref source or abstract enrichment is enabled. Example: curator@example.com
+    mailto: null # Contact email for polite Crossref API access. Required whenever a Crossref retriever is constructed: the crossref source itself, or an openalex source replaced at startup because it has no API key and allow_anonymous is false. A blank value in those cases fails the run at startup; abstract enrichment never uses it. Example: curator@example.com
     lookback_days: 1 # Number of completed UTC publication days to retrieve, ending yesterday. Example: 3
   openalex:
     api_keys: [] # Ordered list of free OpenAlex API keys; the first usable key is sent and later entries serve as failover. Empty/null entries are skipped. Example: ["your-openalex-api-key","your-backup-openalex-api-key"]
-    allow_anonymous: false # Opt-in to keyless anonymous requests when no API key is configured; keep false to avoid OpenAlex rate limits. Example: true
+    allow_anonymous: false # Opt-in to keyless anonymous requests when no API key is configured; with no key and this false, a requested openalex source is replaced by one crossref retriever at startup. Example: true
     lookback_days: 30 # Number of completed UTC publication days to retrieve, ending yesterday. Wider window mitigates OpenAlex's delayed-index by capturing works indexed up to ~a month after publication; paired with persistent DOI deduplication. Example: 30
   pubmed:
     query: null # The PubMed discovery query for new papers, using PubMed search syntax. Required when the pubmed source is enabled. Example: "robotics[Title]"
