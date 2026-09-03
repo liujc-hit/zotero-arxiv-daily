@@ -14,9 +14,25 @@ type StructuredOutput = Literal["paper_digest"]
 type SdkArgument = LlmValue | list[dict[str, str]]
 
 
+class _FunctionCall(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def arguments(self) -> str: ...
+
+
+class _ChatToolCall(Protocol):
+    @property
+    def function(self) -> _FunctionCall: ...
+
+
 class _ChatMessage(Protocol):
     @property
     def content(self) -> str | None: ...
+
+    @property
+    def tool_calls(self) -> Sequence[_ChatToolCall] | None: ...
 
 
 class _ChatChoice(Protocol):
@@ -158,6 +174,11 @@ def _request_llm(
     model = model_value if isinstance(model_value, str) else None
     if thinking == "disabled" and model in _MINIMAX_M2_MODELS:
         raise ThinkingCannotBeDisabledError(model)
+    uses_minimax_m3_chat_tool = (
+        api_mode == "chat_completion"
+        and model == "MiniMax-M3"
+        and structured_output == "paper_digest"
+    )
 
     match api_mode:
         case "chat_completion":
@@ -178,10 +199,23 @@ def _request_llm(
                 case None:
                     pass
                 case "paper_digest":
-                    generation_kwargs["response_format"] = {
-                        "type": "json_schema",
-                        "json_schema": _strict_paper_digest_config(),
-                    }
+                    if uses_minimax_m3_chat_tool:
+                        _ = generation_kwargs.pop("response_format", None)
+                        _ = generation_kwargs.pop("tool_choice", None)
+                        paper_digest_tool: dict[str, LlmValue] = {
+                            "type": "function",
+                            "function": {
+                                "name": "paper_digest",
+                                "description": "Return the requested paper digest.",
+                                "parameters": deepcopy(PAPER_DIGEST_JSON_SCHEMA),
+                            },
+                        }
+                        generation_kwargs["tools"] = [paper_digest_tool]
+                    else:
+                        generation_kwargs["response_format"] = {
+                            "type": "json_schema",
+                            "json_schema": _strict_paper_digest_config(),
+                        }
                 case unreachable:
                     assert_never(unreachable)
             chat_response = _call_sdk(
@@ -189,7 +223,13 @@ def _request_llm(
                 messages=messages,
                 **generation_kwargs,
             )
-            return chat_response.choices[0].message.content or ""
+            message = chat_response.choices[0].message
+            if uses_minimax_m3_chat_tool:
+                for tool_call in message.tool_calls or ():
+                    if tool_call.function.name == "paper_digest":
+                        return tool_call.function.arguments
+                return ""
+            return message.content or ""
 
         case "response":
             if thinking == "disabled" and model == "MiniMax-M3":

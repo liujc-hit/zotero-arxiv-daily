@@ -11,7 +11,7 @@ import tiktoken
 from tests import llm_params, make_recording_client
 from tests.canned_responses import make_sample_paper
 from zotero_arxiv_daily.final_enrichment import FullTextRetriever
-from zotero_arxiv_daily.llm import ApiMode, LlmClient
+from zotero_arxiv_daily.llm import ApiMode, LlmClient, LlmValue
 from zotero_arxiv_daily.protocol import Paper
 
 
@@ -54,6 +54,102 @@ def test_malformed_digest_falls_back_after_exactly_one_call(
     assert paper.tldr == paper.abstract
     assert paper.affiliations is None
     assert len(calls) == 1
+
+
+def test_minimax_m3_tool_digest_sets_both_fields_after_exactly_one_call() -> None:
+    # Given
+    digest = json.dumps(
+        {
+            "tldr": "  Tool-generated digest.  ",
+            "affiliations": [" University B ", "University A", "University B"],
+        }
+    )
+    client, calls = make_recording_client(
+        content=None,
+        tool_calls=(("paper_digest", digest),),
+    )
+    paper = make_sample_paper()
+    params: dict[str, LlmValue] = {
+        "api_mode": "chat_completion",
+        "thinking": "disabled",
+        "generation_kwargs": {
+            "model": "MiniMax-M3",
+            "max_tokens": 16384,
+        },
+    }
+
+    # When
+    result = paper.generate_tldr_and_affiliations(client, params)
+
+    # Then
+    assert result == (
+        "Tool-generated digest.",
+        ["University B", "University A"],
+    )
+    assert paper.tldr == "Tool-generated digest."
+    assert paper.affiliations == ["University B", "University A"]
+    assert len(calls) == 1
+
+
+def test_minimax_m3_missing_digest_tool_falls_back_once_with_redacted_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    from zotero_arxiv_daily import paper_generation
+
+    logs: list[tuple[str, tuple[str, ...]]] = []
+
+    def record_warning(message: str, *args: str) -> None:
+        logs.append((message, args))
+
+    monkeypatch.setattr(
+        paper_generation.logger,
+        "warning",
+        record_warning,
+    )
+    client, calls = make_recording_client(
+        content=json.dumps(
+            {"tldr": "response-content-secret", "affiliations": []}
+        ),
+        tool_calls=(("other_tool", "tool-arguments-secret"),),
+    )
+    paper = make_sample_paper(
+        source="safe-source",
+        url="https://secret.invalid/paper-token",
+        doi="10.secret/doi-token",
+        full_text="full-content-secret",
+    )
+    params: dict[str, LlmValue] = {
+        "api_mode": "chat_completion",
+        "thinking": "disabled",
+        "generation_kwargs": {
+            "model": "MiniMax-M3",
+            "max_tokens": 16384,
+        },
+    }
+
+    # When
+    result = paper.generate_tldr_and_affiliations(client, params)
+
+    # Then
+    rendered = " ".join(
+        str(value) for message, args in logs for value in (message, *args)
+    )
+    assert result == (paper.abstract, None)
+    assert paper.tldr == paper.abstract
+    assert paper.affiliations is None
+    assert len(calls) == 1
+    assert "paper_digest" in rendered
+    assert "safe-source" in rendered
+    assert "JSONDecodeError" in rendered
+    for secret in (
+        "response-content-secret",
+        "tool-arguments-secret",
+        "paper-token",
+        "doi-token",
+        "full-content-secret",
+    ):
+        assert secret not in rendered
 
 
 class SecretSdkError(RuntimeError):
