@@ -16,8 +16,20 @@ VALID_DIGEST: Final = json.dumps(
 
 
 @dataclass(frozen=True, slots=True)
+class _Function:
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCall:
+    function: _Function
+
+
+@dataclass(frozen=True, slots=True)
 class _Message:
-    content: str
+    content: str | None
+    tool_calls: tuple[_ToolCall, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,11 +64,18 @@ class RecordingLlmClient:
 
 
 def make_recording_client(
-    content: str = VALID_DIGEST, failure: Exception | None = None
+    content: str | None = VALID_DIGEST,
+    failure: Exception | None = None,
+    *,
+    tool_calls: tuple[tuple[str, str], ...] = (),
 ) -> tuple[RecordingLlmClient, list[RecordedRequest]]:
     """Create a client that records each SDK request before returning or failing."""
     calls: list[RecordedRequest] = []
     lock = Lock()
+    chat_tool_calls = tuple(
+        _ToolCall(_Function(name=name, arguments=arguments))
+        for name, arguments in tool_calls
+    )
 
     def record(request: RecordedRequest) -> None:
         with lock:
@@ -66,11 +85,13 @@ def make_recording_client(
 
     def create_chat(**kwargs: SdkArgument) -> _ChatCompletion:
         record(kwargs)
-        return _ChatCompletion((_Choice(_Message(content)),))
+        return _ChatCompletion(
+            (_Choice(_Message(content, chat_tool_calls or None)),)
+        )
 
     def create_response(**kwargs: SdkArgument) -> _Response:
         record(kwargs)
-        return _Response(content)
+        return _Response(content or "")
 
     return (
         RecordingLlmClient(
