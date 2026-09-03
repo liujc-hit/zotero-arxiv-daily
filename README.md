@@ -33,7 +33,7 @@
 - Papers sorted by relevance to your recent reading.
 - Retrieval sources: `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, `crossref`, `openalex`, and `pubmed` (`crossref` and `openalex` draw from a built-in robotics/mechatronics venue catalog, while `pubmed` runs whatever query you write). Up to four configured sources are retrieved concurrently and DOI duplicates are merged.
 - Optional sent-DOI deduplication across runs: papers whose DOI you were already emailed are skipped, with the delivery state kept Fernet-encrypted (a dedicated branch of your fork under GitHub Actions, a local file otherwise).
-- Optional pre-rerank abstract enrichment for published papers missing an abstract: Crossref first, then at most one of PubMed / IEEE Xplore / Elsevier / Springer Nature.
+- Optional pre-rerank abstract enrichment for published papers missing an abstract: providers are routed directly, in the fixed priority IEEE Xplore > Elsevier > Springer Nature > PubMed, at most two matched providers are attempted per paper, and the first nonblank abstract wins.
 - Optional venue prestige weighting built from OpenAlex's open citation statistics.
 - AI-generated TL;DR and resolved author affiliations for every paper in the email, through at most one strict structured LLM request per paper.
 - Links to PDF and code implementation (when available) in the email.
@@ -61,7 +61,7 @@
    | RECEIVER | Yes | Address that receives the paper list. | abc@outlook.com |
    | OPENAI_API_KEY | Yes | API key for the LLM that writes the TL;DRs. Free open-model APIs available at [SiliconFlow](https://cloud.siliconflow.cn/i/b3XhBRAm). | sk-xxx |
    | OPENAI_API_BASE | Yes | Base URL of the LLM API. | https://api.siliconflow.cn/v1 |
-   | OPENALEX_API_KEY | When OpenAlex is enabled unless anonymous access is allowed | Primary OpenAlex identity for source retrieval and venue lookups. Raw key only; the client adds the `Bearer` prefix itself. | your-openalex-api-key |
+   | OPENALEX_API_KEY | No, if the Crossref substitute is configured | Primary OpenAlex identity for source retrieval and venue lookups. Raw key only; the client adds the `Bearer` prefix itself. Without it and without `OPENALEX_ALLOW_ANONYMOUS=true`, a requested `openalex` source is replaced by `crossref` at startup. | your-openalex-api-key |
    | OPENALEX_API_KEY_2 | No | Standby OpenAlex key, used only after the primary is rate limited. Leave unset if you have one key. | your-backup-key |
    | NIH_API | No | PubMed (NCBI E-utilities) API key. Optional for both the `pubmed` discovery source and PubMed abstract enrichment; raises the rate cap from 3 to 10 requests/s. | your-nih-api-key |
    | IEEE_XPLORE_API | No | IEEE Xplore API key. Only needed when IEEE abstract enrichment is enabled. | your-ieee-key |
@@ -75,8 +75,8 @@
    | Variable | Required | Description | Example |
    | :--- | :--- | :--- | :--- |
    | CUSTOM_CONFIG | Yes | YAML configuration overlay, written to `config/custom.yaml` at run time. | see below |
-   | PAPER_SOURCES | No | JSON/YAML list string that overrides `executor.source`. Order is preserved and matters: it sets retrieval priority and decides which object wins a DOI duplicate. Default `["arxiv","openalex"]`. | `["arxiv","biorxiv","medrxiv","chemrxiv","crossref","openalex","pubmed"]` |
-   | CROSSREF_MAILTO | No | Contact email for Crossref's polite pool. Needed whenever the `crossref` source or abstract enrichment is enabled; unset means no Crossref client and abstract enrichment is skipped with a warning. | curator@example.com |
+   | PAPER_SOURCES | No | JSON/YAML list string that overrides `executor.source`. Order is preserved and matters: it sets retrieval priority and decides which object wins a DOI duplicate. Default `["arxiv","openalex"]`. A requested `openalex` that has no API key and no anonymous fallback is replaced once by `crossref` at startup. | `["arxiv","biorxiv","medrxiv","chemrxiv","crossref","openalex","pubmed"]` |
+   | CROSSREF_MAILTO | No | Contact email for Crossref's polite pool. Required whenever a Crossref retriever is constructed: the `crossref` source, or an `openalex` source replaced at startup because it has no API key and anonymous access is off. A missing or blank value in those cases fails the run at startup. Abstract enrichment never uses Crossref. | curator@example.com |
    | ABSTRACT_ENRICHMENT_ENABLED | No | Master switch of pre-rerank abstract enrichment. Unset (and anything but `true`) resolves to `false`. | true |
    | PUBMED_ENABLED | No | Enables the PubMed abstract enrichment vertical only. It does not enable PubMed discovery; list `pubmed` in `PAPER_SOURCES` for that. Default `false`. | true |
    | PUBMED_EMAIL | No | Contact email identifying you to NCBI E-utilities; required by both the `pubmed` discovery source and PubMed enrichment (it is not a Secret). | curator@example.com |
@@ -86,7 +86,7 @@
    | ELSEVIER_ENABLED | No | Enables the Elsevier enrichment vertical. Default `false`. | true |
    | SPRINGER_ENABLED | No | Enables the Springer Nature enrichment vertical. Default `false`. | true |
    | VENUE_PRESTIGE_ENABLED | No | Enables OpenAlex venue citation proxy weighting in the reranker. Default `false`. | true |
-   | OPENALEX_ALLOW_ANONYMOUS | No | Only an explicit `true` lets OpenAlex fall back to keyless anonymous requests when no configured key is usable. Anything else (including unset) fails closed. | true |
+   | OPENALEX_ALLOW_ANONYMOUS | No | Only an explicit `true` lets OpenAlex fall back to keyless anonymous requests when no configured key is usable. Anything else (including unset) means no anonymous access; a requested `openalex` source with no key is then replaced by `crossref` at startup. | true |
    | SENT_DOI_STATE_ENABLED | No | Enables persistent sent-DOI deduplication: papers whose canonical DOI was already emailed are skipped in later runs. Requires the `SENT_DOI_STATE_KEY` Secret. Unset (and anything but `true`) resolves to `false`. | true |
 
 4. Paste this full-capability configuration into the value of `CUSTOM_CONFIG`. Every optional feature is present and wired to a repository Variable or Secret, so toggling a feature never means editing YAML:
@@ -125,7 +125,7 @@
       chemrxiv:
         include_new_versions: false  # true also includes revised versions of existing preprints.
       crossref:
-        mailto: ${oc.env:CROSSREF_MAILTO,null} # Required when the Crossref source or abstract enrichment is enabled.
+        mailto: ${oc.env:CROSSREF_MAILTO,null} # Required when a Crossref retriever is constructed: the crossref source itself, or an openalex source replaced at startup for lacking credentials. Never used by abstract enrichment.
         lookback_days: 1  # Completed UTC publication days to retrieve, ending yesterday.
       openalex:
         api_keys:  # Raw keys from Secrets; null entries are skipped, at most two distinct keys.
@@ -205,7 +205,7 @@
       key: ${oc.env:SENT_DOI_STATE_KEY,null} # Fernet key; required when enabled.
      ```
 
-   With this overlay pasted, the exact Variables that turn every new feature on are:
+   With this overlay pasted, configure the source set and optional feature switches with these Variables:
 
      ```text
      PAPER_SOURCES=["arxiv","biorxiv","medrxiv","chemrxiv","crossref","openalex","pubmed"]
@@ -222,7 +222,7 @@
      SENT_DOI_STATE_ENABLED=true
      ```
 
-   together with the provider Secrets `NIH_API`, `IEEE_XPLORE_API`, `ELSEVIER_API`, and `SPRINGER_API`. Every provider flag is independent: leaving any of them `false` (or unset) simply skips that vertical, and abstract enrichment also works with `CROSSREF_MAILTO` alone (Crossref-only). OpenAlex requires an `OPENALEX_API_KEY` Secret or `OPENALEX_ALLOW_ANONYMOUS=true` whenever `openalex` is in `PAPER_SOURCES`. `VENUE_PRESTIGE_ENABLED=true` has the same identity requirement even when `openalex` is not a source; otherwise venue weighting is skipped with a warning. The `PUBMED_ISSNS` value above is a format example (NEJM and JAMA ISSNs), not a recommendation, and `PUBMED_QUERY=robotics[Title]` is likewise a syntax example: the query has no default, so write your own. Listing `pubmed` in `PAPER_SOURCES` is what enables PubMed discovery, and it needs `PUBMED_QUERY` plus `PUBMED_EMAIL`; `PUBMED_ENABLED` stays enrichment-only. `SENT_DOI_STATE_ENABLED=true` additionally requires the `SENT_DOI_STATE_KEY` Secret and turns on persistent sent-DOI deduplication (details in the GitHub Actions Deployment section).
+   together with the provider Secrets `NIH_API`, `IEEE_XPLORE_API`, `ELSEVIER_API`, and `SPRINGER_API`. Every provider flag is independent: leaving any of them `false` (or unset) simply skips that vertical, and abstract enrichment needs no Crossref identity at all. Whenever `openalex` is in `PAPER_SOURCES` without an `OPENALEX_API_KEY` Secret and without `OPENALEX_ALLOW_ANONYMOUS=true`, the requested source is replaced once by `crossref` at startup, so `CROSSREF_MAILTO` must be set or the run fails at startup. `VENUE_PRESTIGE_ENABLED=true` needs an OpenAlex identity even when `openalex` is not a source; otherwise venue weighting is skipped with a warning. The `PUBMED_ISSNS` value above is a format example (NEJM and JAMA ISSNs), not a recommendation, and `PUBMED_QUERY=robotics[Title]` is likewise a syntax example: the query has no default, so write your own. Listing `pubmed` in `PAPER_SOURCES` is what enables PubMed discovery, and it needs `PUBMED_QUERY` plus `PUBMED_EMAIL`; `PUBMED_ENABLED` stays enrichment-only. `SENT_DOI_STATE_ENABLED=true` additionally requires the `SENT_DOI_STATE_KEY` Secret and turns on persistent sent-DOI deduplication (details in the GitHub Actions Deployment section).
 
 5. Manually trigger the **Test** workflow to verify everything, then check its log and the receiver inbox.
    ![test](./assets/test.png)
@@ -245,6 +245,8 @@ Configuration is composed with Hydra/OmegaConf from `config/base.yaml` (defaults
 ### OpenAlex source
 
 The `openalex` source is activated purely by listing `openalex` in `executor.source`. It retrieves papers from a built-in, exact venue catalog (a robotics/mechatronics journal expansion plus a fixed default robotics conference set, matched by exact OpenAlex source IDs and ISSNs), so its only settings are `api_keys`, `allow_anonymous`, and `lookback_days`.
+
+If no API key is configured and `allow_anonymous` is false, the OpenAlex retriever cannot be constructed. Startup then replaces it with a single Crossref retriever (no duplicate is added when `crossref` is already configured), and that substitution is the only fallback: it happens at construction time for the missing identity, never in response to a failed OpenAlex request at runtime. The replacement makes `source.crossref.mailto` (`CROSSREF_MAILTO`) required, so a missing or blank value fails the run at startup through the usual Crossref configuration error.
 
 `lookback_days` defaults to 30 completed UTC publication days (ending yesterday). OpenAlex keeps indexing many works for days to weeks after publication, so the wide window is the mitigation for that delay: late-indexed works still get caught. The cost is overlap, since most of each 30-day window was already retrievable by earlier runs and by other sources. Within one run the DOI merge collapses that overlap; across runs, persistent sent-DOI deduplication (below) keeps the overlap from being emailed twice.
 
@@ -273,13 +275,13 @@ This is History-based discovery over PubMed entry dates; `enrichment.pubmed` (be
 
 ### Concurrent retrieval and DOI merge
 
-`executor.source` (the `PAPER_SOURCES` variable) lists retrieval sources in priority order; available names are `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, `crossref`, `openalex`, and `pubmed`. Configured sources are retrieved concurrently, at most four at a time, and each source failure is isolated: the error is logged and that source contributes nothing while the rest still run. The flattened candidate list preserves configured source order, which also decides DOI duplicates: papers sharing a normalized DOI keep the object from the earliest configured source, and the duplicate only fills fields missing on the winner (abstract, publisher, journal, `is_preprint`, plus a normalized union of ISSNs). Papers without a valid DOI pass through untouched.
+`executor.source` (the `PAPER_SOURCES` variable) lists retrieval sources in priority order; available names are `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, `crossref`, `openalex`, and `pubmed`. A requested `openalex` that cannot be constructed (no API key, `allow_anonymous: false`) is replaced by one Crossref retriever at startup, never as a duplicate when `crossref` is already listed. Configured sources are retrieved concurrently, at most four at a time, and each source failure is isolated: the error is logged and that source contributes nothing while the rest still run. The flattened candidate list preserves configured source order, which also decides DOI duplicates: papers sharing a normalized DOI keep the object from the earliest configured source, and the duplicate only fills fields missing on the winner (abstract, publisher, journal, `is_preprint`, plus a normalized union of ISSNs). Papers without a valid DOI pass through untouched.
 
 The `crossref` source retrieves works from completed UTC publication days (`source.crossref.lookback_days`, ending yesterday) for the same built-in venue catalog as the OpenAlex source (a robotics/mechatronics journal expansion plus the fixed default robotics conference set, matched by exact ISSN). It requires a nonblank `source.crossref.mailto` (`CROSSREF_MAILTO`) and does not retry. The `pubmed` source instead runs your own query over completed UTC entry days (`source.pubmed.lookback_days`, default 3, ending yesterday), as described in the PubMed source section above.
 
 Effective outbound limits, enforced client-side:
 
-- Crossref (both the discovery retriever and the abstract-enrichment lookups): 10 request starts per second and at most 3 requests in flight per client; no retries.
+- Crossref (discovery retriever): 10 request starts per second and at most 3 requests in flight per client; no retries.
 - PubMed (both the discovery source's ESearch/EFetch and enrichment): 3 requests/s anonymous, up to 10/s with `NIH_API`; no retries.
 - Elsevier enrichment: hard-capped at 9 requests/s; once a response reports zero remaining weekly quota, further Elsevier requests are skipped for the rest of the run.
 - IEEE and Springer enrichment: conservative default of 1 request/s (`request_rate` is configurable); this project does not assert undocumented universal daily quotas for them.
@@ -306,12 +308,12 @@ Corrupt, tampered, or undecryptable state (for example after a key change) fails
 
 ### Abstract enrichment (before rerank)
 
-Master switch: `enrichment.enabled: true` (`ABSTRACT_ENRICHMENT_ENABLED=true`) plus a usable Crossref identity (`CROSSREF_MAILTO`). A paper is eligible only when it is confirmed published (`is_preprint is false`), its abstract is blank, and it carries a valid DOI. At most `enrichment.max_papers` eligible candidates are processed per run by `enrichment.workers` threads.
+Master switch: `enrichment.enabled: true` (`ABSTRACT_ENRICHMENT_ENABLED=true`). Crossref plays no part here; no Crossref identity is needed or consulted. A paper is eligible only when it is confirmed published (`is_preprint is false`), its abstract is blank, and it carries a valid DOI. At most `enrichment.max_papers` eligible candidates are processed per run by `enrichment.workers` threads.
 
-Each eligible paper is enriched in two steps:
+Each eligible paper is routed straight to the provider adapters, with no metadata pre-step:
 
-1. Crossref metadata: one `works/{doi}` lookup fills missing publisher, ISSNs, and `is_preprint` on the paper and takes the Crossref abstract when present. If Crossref returned an abstract, the paper is done.
-2. Otherwise at most one vertical adapter is selected, in the fixed priority PubMed > IEEE > Elsevier > Springer, matched by DOI prefix, publisher name, or ISSN intersection. Each provider gets exactly one attempt; there is no cross-provider retry or fallback, and a failed or empty attempt just leaves the abstract blank.
+1. Matching adapters are ordered by the fixed priority IEEE Xplore > Elsevier > Springer Nature > PubMed. An adapter matches when its vertical is enabled with its credentials (PubMed additionally needs its contact email) and the paper points at it: matching is by DOI prefix, publisher name, or ISSN intersection (PubMed matches by ISSN intersection only).
+2. At most two matched adapters are attempted per paper, each adapter at most once. The first attempt that returns a nonblank abstract wins and enrichment stops there; if neither does, the abstract stays blank.
 
 Do not confuse the vertical with the retrieval source of the same name. `enrichment.pubmed` is strictly a DOI-to-PMID abstract enrichment step: it resolves the DOI to a single PMID and fetches that record, and only for papers whose ISSNs intersect `enrichment.pubmed.issns` (`PUBMED_ISSNS`). `PUBMED_ENABLED` toggles only this enrichment; it never enables discovery and is never a fallback for the other providers. Discovery is the `source.pubmed` History ESearch/EFetch described in the PubMed source section above, turned on by listing `pubmed` in `PAPER_SOURCES`.
 
@@ -394,7 +396,7 @@ Full text never participates in ranking. It is fetched only for papers that alre
 
 - Relevance is heuristic (embedding similarity with the knobs above). Tune `reranker.topk` / `executor.min_score` and curate the corpus via `zotero.include_path` to sharpen results.
 - Runtime cost sits in two bounded places: pre-rerank abstract enrichment, capped by `enrichment.max_papers` regardless of the day's retrieval volume, and the final stage (lazy full text plus one LLM request per paper), which scales with the selected output (pinned + top-N), not with retrieval volume. Very large emails can still exceed the GitHub-hosted runner quota (6 h per job on public repos, 2000 min/month on private ones). Alternatives: a self-hosted runner, your own server, or paying for the overage.
-- Third-party APIs and their quotas may change at any time. Failing sources and providers are skipped gracefully, but a quota change can effectively disable a feature.
+- Third-party APIs and their quotas may change at any time. Expected request and response failures are isolated so other sources or matched providers can continue; unexpected programming errors still propagate. A quota change can effectively disable a feature.
 - The `openalex` and `crossref` sources cover exactly the built-in venue catalog; papers published outside those venues won't appear from those sources.
 
 ## 📃 License
