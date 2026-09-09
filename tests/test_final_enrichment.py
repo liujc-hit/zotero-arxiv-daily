@@ -18,9 +18,8 @@ from zotero_arxiv_daily.protocol import Paper
 NO_AFFILIATIONS_DIGEST = json.dumps(
     {"tldr": "Abstract-only digest.", "affiliations": []}
 )
-NO_CONTENT_TLDR = (
-    "Failed to generate TLDR. Neither full text nor abstract is provided"
-)
+NO_CONTENT_TLDR = "无可用摘要/全文，未生成 TLDR"
+GENERATION_FAILED_TLDR = "Failed to generate TLDR"
 
 
 MALFORMED_DIGESTS = (
@@ -216,6 +215,24 @@ def test_blank_abstract_and_full_text_skip_sdk_with_historical_tldr(
     assert paper.tldr == NO_CONTENT_TLDR
     assert paper.affiliations is None
     assert calls == []
+
+
+@pytest.mark.parametrize("api_mode", ["chat_completion", "response"])
+def test_blank_abstract_failure_falls_back_to_nonblank_tldr(
+    api_mode: ApiMode,
+) -> None:
+    # Given
+    client, calls = make_recording_client(MALFORMED_DIGESTS[0])
+    paper = make_sample_paper(abstract=" \n", full_text="Retrieved full text.")
+
+    # When
+    result = paper.generate_tldr_and_affiliations(client, llm_params(api_mode))
+
+    # Then
+    assert result == (GENERATION_FAILED_TLDR, None)
+    assert paper.tldr == GENERATION_FAILED_TLDR
+    assert paper.affiliations is None
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("api_mode", ["chat_completion", "response"])
