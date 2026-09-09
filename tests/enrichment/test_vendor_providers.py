@@ -111,48 +111,114 @@ def test_elsevier_uses_encoded_doi_header_and_stops_after_zero_remaining(
     assert calls[0].allow_redirects is False
 
 
-@pytest.mark.parametrize(
-    ("content_type", "expected"),
-    [("JournalArticle", "Springer abstract."), ("BookChapter", None)],
-)
-def test_springer_accepts_only_the_first_journal_article_record(
+def _meta_v2_record(**overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "doi": "10.1007/s11370-026-00752-z",
+        "contentType": "Article",
+        "publicationType": "Journal",
+        "genre": ["OriginalPaper", "Original Research Paper "],
+        "title": "Example Springer article title",
+        "abstract": "<p>Springer abstract.</p>",
+        "issn": "2470-9459",
+        "eIssn": "2470-9467",
+        "publisherName": "Springer Nature",
+    }
+    record.update(overrides)
+    return record
+
+
+def _meta_v2_payload(records: object) -> dict[str, object]:
+    return {
+        "apiMessage": None,
+        "facets": [],
+        "query": "doi:10.1007/s11370-026-00752-z",
+        "records": records,
+        "result": {"total": 1},
+    }
+
+
+def test_springer_returns_first_meta_v2_article_abstract(
     monkeypatch: pytest.MonkeyPatch,
-    content_type: str,
-    expected: str | None,
 ) -> None:
-    # Given a Springer result with a known content type
-    doi = "10.1007/example"
+    # Given a meta v2 record whose bare DOI matches the queried DOI caselessly
+    doi = "10.1007/s11370-026-00752-z"
     calls = install_get(
         monkeypatch,
         (
             lambda: Response(
-                payload={
-                    "records": [
-                        {
-                            "publicationType": content_type,
-                            "abstract": "<p>Springer abstract.</p>",
-                        }
-                    ]
-                }
+                payload=_meta_v2_payload([_meta_v2_record()])
             ),
         ),
     )
 
-    # When the DOI is fetched from Springer metadata
+    # When the DOI is fetched from Springer Meta in a different case
     abstract = SpringerAdapter(
         SpringerSettings(enabled=True, api_key=SECRET)
-    ).fetch_abstract(doi)
+    ).fetch_abstract(doi.upper())
 
-    # Then only JournalArticle is accepted and the fixed query shape is used
-    assert abstract == expected
-    assert calls[0].url == "https://api.springernature.com/metadata/json"
+    # Then the abstract is cleaned and the fixed meta v2 query shape is used
+    assert abstract == "Springer abstract."
+    assert calls[0].url == "https://api.springernature.com/meta/v2/json"
     assert calls[0].params == {
-        "q": f"doi:{doi}",
+        "q": f"doi:{doi.upper()}",
         "api_key": SECRET,
         "p": 1,
         "s": 1,
     }
     assert calls[0].headers == {"Accept": "application/json"}
+
+
+@pytest.mark.parametrize(
+    "record_overrides",
+    [
+        {"contentType": "Chapter"},
+        {"doi": "10.1007/different-doi"},
+        {"doi": None},
+        {"abstract": "   "},
+        {"abstract": None},
+    ],
+)
+def test_springer_rejects_non_article_or_mismatched_meta_v2_records(
+    monkeypatch: pytest.MonkeyPatch,
+    record_overrides: dict[str, object],
+) -> None:
+    # Given a meta v2 record failing the article or DOI gate
+    calls = install_get(
+        monkeypatch,
+        (
+            lambda: Response(
+                payload=_meta_v2_payload([_meta_v2_record(**record_overrides)])
+            ),
+        ),
+    )
+
+    # When the original DOI is fetched from Springer Meta
+    abstract = SpringerAdapter(
+        SpringerSettings(enabled=True, api_key=SECRET)
+    ).fetch_abstract("10.1007/s11370-026-00752-z")
+
+    # Then no abstract is returned for the gated record
+    assert abstract is None
+    assert len(calls) == 1
+
+
+def test_springer_returns_none_when_meta_v2_has_no_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an empty meta v2 record list
+    calls = install_get(
+        monkeypatch,
+        (lambda: Response(payload=_meta_v2_payload([])),),
+    )
+
+    # When the DOI is fetched from Springer Meta
+    abstract = SpringerAdapter(
+        SpringerSettings(enabled=True, api_key=SECRET)
+    ).fetch_abstract("10.1007/s11370-026-00752-z")
+
+    # Then no abstract is returned without further requests
+    assert abstract is None
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("status_code", [404, 429, 503])

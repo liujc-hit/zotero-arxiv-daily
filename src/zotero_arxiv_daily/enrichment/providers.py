@@ -32,7 +32,7 @@ from .transport import (
 
 _IEEE_ENDPOINT: Final = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
 _ELSEVIER_ENDPOINT: Final = "https://api.elsevier.com/content/abstract/doi"
-_SPRINGER_ENDPOINT: Final = "https://api.springernature.com/metadata/json"
+_SPRINGER_ENDPOINT: Final = "https://api.springernature.com/meta/v2/json"
 _PUBMED_ESEARCH_ENDPOINT: Final = (
     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 )
@@ -146,7 +146,7 @@ class ElsevierAdapter:
 
 @final
 class SpringerAdapter:
-    """Retrieve one JournalArticle abstract from Springer Nature metadata."""
+    """Retrieve one article abstract from the Springer Nature Meta API."""
 
     def __init__(
         self,
@@ -162,6 +162,9 @@ class SpringerAdapter:
 
     def fetch_abstract(self, doi: str) -> str | None:
         if not self._settings.available:
+            return None
+        target = normalize_doi(doi)
+        if target is None:
             return None
         response = request_once(
             ProviderRequest(
@@ -183,7 +186,10 @@ class SpringerAdapter:
         if not records:
             return None
         record = _mapping(records[0])
-        if _clean_text(record.get("publicationType")).casefold() != "journalarticle":
+        if _clean_text(record.get("contentType")).casefold() != "article":
+            return None
+        record_doi = record.get("doi")
+        if normalize_doi(record_doi if isinstance(record_doi, str) else None) != target:
             return None
         return _clean_text(record.get("abstract")) or None
 
