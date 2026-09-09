@@ -20,7 +20,7 @@ source:
   openalex:
     api_keys: [] # Ordered list of free OpenAlex API keys; the first usable key is sent and later entries serve as failover. Empty/null entries are skipped. Example: ["your-openalex-api-key","your-backup-openalex-api-key"]
     allow_anonymous: false # Opt-in to keyless anonymous requests when no API key is configured; with no key and this false, a requested openalex source is replaced by one crossref retriever at startup. Example: true
-    lookback_days: 30 # Number of completed UTC publication days to retrieve, ending yesterday. Wider window mitigates OpenAlex's delayed-index by capturing works indexed up to ~a month after publication; paired with persistent DOI deduplication. Example: 30
+    lookback_days: 30 # Number of completed UTC publication days to retrieve, ending yesterday. Wider window mitigates OpenAlex's delayed-index by capturing works indexed up to ~a month after publication; paired with persistent cross-run deduplication. Example: 30
   pubmed:
     query: null # The PubMed discovery query for new papers, using PubMed search syntax. Required when the pubmed source is enabled. Example: "robotics[Title]"
     contact_email: null # Contact email for polite PubMed API access. Required when the pubmed source is enabled. Example: curator@example.com
@@ -108,6 +108,6 @@ executor:
   reranker: local # The reranker to use. Example: 'local' or 'api'
 
 sent_doi_state:
-  enabled: false # Whether to persist the canonical DOIs of sent papers in an encrypted local file so later runs skip them. Example: true
-  path: .state/sent-dois.fernet # Path of the encrypted sent-DOI state file, authenticated with Fernet and replaced atomically. Example: .state/sent-dois.fernet
-  key: null # Fernet key encrypting the sent-DOI state. Required when enabled; generate one with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Example: your-fernet-key
+  enabled: false # Whether to persist the canonical identities of sent papers in an encrypted local file so later runs skip them. Each paper is identified by a valid DOI or DOI-resolver URL first, else the canonical arXiv ID (revisions and abs/pdf variants collapse), else a narrowly normalized stable URL; papers with none are not tracked. The DOI-named section, variables, and file path are retained legacy names. Example: true
+  path: .state/sent-dois.fernet # Path of the encrypted sent-state file, authenticated with Fernet and replaced atomically after each successful send. Legacy filename retained. Example: .state/sent-dois.fernet
+  key: null # Fernet key encrypting the sent state. Required when enabled; generate one with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Example: your-fernet-key

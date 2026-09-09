@@ -32,7 +32,7 @@
 - Free daily delivery, no installation, fully automated.
 - Papers sorted by relevance to your recent reading.
 - Retrieval sources: `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`, `crossref`, `openalex`, and `pubmed` (`crossref` and `openalex` draw from a built-in robotics/mechatronics venue catalog, while `pubmed` runs whatever query you write). Up to four configured sources are retrieved concurrently and DOI duplicates are merged.
-- Optional sent-DOI deduplication across runs: papers whose DOI you were already emailed are skipped, with the delivery state kept Fernet-encrypted (a dedicated branch of your fork under GitHub Actions, a local file otherwise).
+- Optional cross-run deduplication: papers you were already emailed are skipped by paper identity (valid DOI or DOI-resolver URL, else canonical arXiv ID, else normalized stable URL), with the delivery state kept Fernet-encrypted (a dedicated branch of your fork under GitHub Actions, a local file otherwise). The DOI-named settings are retained legacy names.
 - Optional pre-rerank abstract enrichment for published papers missing an abstract: providers are routed directly, in the fixed priority IEEE Xplore > Elsevier > Springer Nature > PubMed, at most two matched providers are attempted per paper, and the first nonblank abstract wins.
 - Optional venue prestige weighting built from OpenAlex's open citation statistics.
 - AI-generated TL;DR and resolved author affiliations for every paper in the email, through at most one strict structured LLM request per paper.
@@ -67,7 +67,7 @@
    | IEEE_XPLORE_API | No | IEEE Xplore API key. Only needed when IEEE abstract enrichment is enabled. | your-ieee-key |
    | ELSEVIER_API | No | Elsevier API key. Only needed when Elsevier abstract enrichment is enabled. | your-elsevier-key |
    | SPRINGER_API | No | Springer Nature metadata API key. Only needed when Springer abstract enrichment is enabled. | your-springer-key |
-   | SENT_DOI_STATE_KEY | When `SENT_DOI_STATE_ENABLED=true` | Fernet key encrypting the persistent sent-DOI delivery state (see GitHub Actions Deployment). Generate one with `uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and store only the printed key. | your-fernet-key |
+   | SENT_DOI_STATE_KEY | When `SENT_DOI_STATE_ENABLED=true` | Fernet key encrypting the persistent sent-paper delivery state; the DOI-named variable is a retained legacy name (see GitHub Actions Deployment). Generate one with `uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and store only the printed key. | your-fernet-key |
 
 3. Add the repository **Variables** (same settings page, Variables tab). Variables are plain non-secret values, readable in the UI, which is why the config you paste below must only *reference* Secrets via `${oc.env:...}`, never contain them.
    ![vars](./assets/repo_var.png)
@@ -87,7 +87,7 @@
    | SPRINGER_ENABLED | No | Enables the Springer Nature enrichment vertical. Default `false`. | true |
    | VENUE_PRESTIGE_ENABLED | No | Enables OpenAlex venue citation proxy weighting in the reranker. Default `false`. | true |
    | OPENALEX_ALLOW_ANONYMOUS | No | Only an explicit `true` lets OpenAlex fall back to keyless anonymous requests when no configured key is usable. Anything else (including unset) means no anonymous access; a requested `openalex` source with no key is then replaced by `crossref` at startup. | true |
-   | SENT_DOI_STATE_ENABLED | No | Enables persistent sent-DOI deduplication: papers whose canonical DOI was already emailed are skipped in later runs. Requires the `SENT_DOI_STATE_KEY` Secret. Unset (and anything but `true`) resolves to `false`. | true |
+   | SENT_DOI_STATE_ENABLED | No | Enables persistent cross-run deduplication: papers whose identity (valid DOI or DOI-resolver URL, else canonical arXiv ID, else normalized stable URL) was already emailed are skipped in later runs. The DOI-named variable is a retained legacy name. Requires the `SENT_DOI_STATE_KEY` Secret. Unset (and anything but `true`) resolves to `false`. | true |
 
 4. Paste this full-capability configuration into the value of `CUSTOM_CONFIG`. Every optional feature is present and wired to a repository Variable or Secret, so toggling a feature never means editing YAML:
    ![custom_config](./assets/config_var.png)
@@ -132,7 +132,7 @@
           - ${oc.env:OPENALEX_API_KEY,null}
           - ${oc.env:OPENALEX_API_KEY_2,null}
         allow_anonymous: ${oc.decode:${oc.env:OPENALEX_ALLOW_ANONYMOUS,'false'}}
-        lookback_days: 30  # Completed UTC publication days to retrieve, ending yesterday. The 30-day default mitigates OpenAlex's delayed indexing; sent-DOI deduplication keeps the overlap from being re-sent.
+        lookback_days: 30  # Completed UTC publication days to retrieve, ending yesterday. The 30-day default mitigates OpenAlex's delayed indexing; cross-run deduplication keeps the overlap from being re-sent.
       pubmed:  # Discovery source; independent of enrichment.pubmed below.
         query: ${oc.env:PUBMED_QUERY,null} # Required when this source is enabled; there is no default query.
         contact_email: ${oc.env:PUBMED_EMAIL,null} # Required when this source is enabled.
@@ -199,9 +199,9 @@
       source: ${oc.decode:${oc.env:PAPER_SOURCES,'["arxiv","openalex"]'}}
       reranker: local  # Or 'api'.
 
-    sent_doi_state:  # Persistent sent-DOI deduplication; the workflows also pass these three fields on the command line.
+    sent_doi_state:  # Persistent cross-run deduplication by paper identity; DOI-named settings are retained legacy names. The workflows also pass these three fields on the command line.
       enabled: ${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED,'false'}}
-      path: .state/sent-dois.fernet  # Encrypted delivery state, replaced atomically after each successful send.
+      path: .state/sent-dois.fernet  # Encrypted delivery state of sent-paper identities, replaced atomically after each successful send.
       key: ${oc.env:SENT_DOI_STATE_KEY,null} # Fernet key; required when enabled.
      ```
 
@@ -222,7 +222,7 @@
      SENT_DOI_STATE_ENABLED=true
      ```
 
-   together with the provider Secrets `NIH_API`, `IEEE_XPLORE_API`, `ELSEVIER_API`, and `SPRINGER_API`. Every provider flag is independent: leaving any of them `false` (or unset) simply skips that vertical, and abstract enrichment needs no Crossref identity at all. Whenever `openalex` is in `PAPER_SOURCES` without an `OPENALEX_API_KEY` Secret and without `OPENALEX_ALLOW_ANONYMOUS=true`, the requested source is replaced once by `crossref` at startup, so `CROSSREF_MAILTO` must be set or the run fails at startup. `VENUE_PRESTIGE_ENABLED=true` needs an OpenAlex identity even when `openalex` is not a source; otherwise venue weighting is skipped with a warning. The `PUBMED_ISSNS` value above is a format example (NEJM and JAMA ISSNs), not a recommendation, and `PUBMED_QUERY=robotics[Title]` is likewise a syntax example: the query has no default, so write your own. Listing `pubmed` in `PAPER_SOURCES` is what enables PubMed discovery, and it needs `PUBMED_QUERY` plus `PUBMED_EMAIL`; `PUBMED_ENABLED` stays enrichment-only. `SENT_DOI_STATE_ENABLED=true` additionally requires the `SENT_DOI_STATE_KEY` Secret and turns on persistent sent-DOI deduplication (details in the GitHub Actions Deployment section).
+   together with the provider Secrets `NIH_API`, `IEEE_XPLORE_API`, `ELSEVIER_API`, and `SPRINGER_API`. Every provider flag is independent: leaving any of them `false` (or unset) simply skips that vertical, and abstract enrichment needs no Crossref identity at all. Whenever `openalex` is in `PAPER_SOURCES` without an `OPENALEX_API_KEY` Secret and without `OPENALEX_ALLOW_ANONYMOUS=true`, the requested source is replaced once by `crossref` at startup, so `CROSSREF_MAILTO` must be set or the run fails at startup. `VENUE_PRESTIGE_ENABLED=true` needs an OpenAlex identity even when `openalex` is not a source; otherwise venue weighting is skipped with a warning. The `PUBMED_ISSNS` value above is a format example (NEJM and JAMA ISSNs), not a recommendation, and `PUBMED_QUERY=robotics[Title]` is likewise a syntax example: the query has no default, so write your own. Listing `pubmed` in `PAPER_SOURCES` is what enables PubMed discovery, and it needs `PUBMED_QUERY` plus `PUBMED_EMAIL`; `PUBMED_ENABLED` stays enrichment-only. `SENT_DOI_STATE_ENABLED=true` additionally requires the `SENT_DOI_STATE_KEY` Secret and turns on persistent cross-run deduplication of already-emailed papers (details in the GitHub Actions Deployment section).
 
 5. Manually trigger the **Test** workflow to verify everything, then check its log and the receiver inbox.
    ![test](./assets/test.png)
@@ -248,7 +248,7 @@ The `openalex` source is activated purely by listing `openalex` in `executor.sou
 
 If no API key is configured and `allow_anonymous` is false, the OpenAlex retriever cannot be constructed. Startup then replaces it with a single Crossref retriever (no duplicate is added when `crossref` is already configured), and that substitution is the only fallback: it happens at construction time for the missing identity, never in response to a failed OpenAlex request at runtime. The replacement makes `source.crossref.mailto` (`CROSSREF_MAILTO`) required, so a missing or blank value fails the run at startup through the usual Crossref configuration error.
 
-`lookback_days` defaults to 30 completed UTC publication days (ending yesterday). OpenAlex keeps indexing many works for days to weeks after publication, so the wide window is the mitigation for that delay: late-indexed works still get caught. The cost is overlap, since most of each 30-day window was already retrievable by earlier runs and by other sources. Within one run the DOI merge collapses that overlap; across runs, persistent sent-DOI deduplication (below) keeps the overlap from being emailed twice.
+`lookback_days` defaults to 30 completed UTC publication days (ending yesterday). OpenAlex keeps indexing many works for days to weeks after publication, so the wide window is the mitigation for that delay: late-indexed works still get caught. The cost is overlap, since most of each 30-day window was already retrievable by earlier runs and by other sources. Within one run the DOI merge collapses that overlap; across runs, persistent identity-based deduplication (below) keeps the overlap from being emailed twice.
 
 Client behavior, implemented in `src/zotero_arxiv_daily/retriever/openalex_client.py`:
 
@@ -290,19 +290,23 @@ Effective outbound limits, enforced client-side:
 
 ### Sent-DOI deduplication (encrypted delivery state)
 
-With `sent_doi_state.enabled: true` (`SENT_DOI_STATE_ENABLED=true` plus the `SENT_DOI_STATE_KEY` Secret), the pipeline remembers the canonical DOIs it has already emailed and skips them in later runs. The state is a versioned snapshot of sorted, normalized DOIs, encrypted with Fernet (authenticated encryption) using the key from the Secret, and written to `sent_doi_state.path` (`.state/sent-dois.fernet`) through an atomic temp-file-and-replace with 0600 permissions. Generate the key with:
+With `sent_doi_state.enabled: true` (`SENT_DOI_STATE_ENABLED=true` plus the `SENT_DOI_STATE_KEY` Secret), the pipeline remembers the papers it has already emailed and skips them in later runs. The `sent_doi_state` section, the `SENT_DOI_*` names, the `.state/sent-dois.fernet` path, and the `sent-doi-state-v1` branch are legacy deployment names kept for compatibility; what the state holds is canonical paper identities. The state is a versioned snapshot of sorted canonical identities, encrypted with Fernet (authenticated encryption) using the key from the Secret, and written to `sent_doi_state.path` (`.state/sent-dois.fernet`) through an atomic temp-file-and-replace with 0600 permissions. Generate the key with:
 
 ```bash
 uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
+Each paper is reduced to one identity, by precedence: a valid paper DOI; a DOI-resolver URL (`doi.org` or `dx.doi.org`), reduced to that DOI; a recognized arXiv `abs`/`pdf` URL on the exact host `arxiv.org` (taken from the paper URL or the PDF URL), reduced to the canonical arXiv ID; the paper URL as a canonical absolute HTTP(S) URL; otherwise the paper has no persistable identity. arXiv revision suffixes are stripped along the way, so the `v1`/`v2` and `abs`/`pdf` forms of one paper collapse to the same unversioned arXiv ID. The URL fallback is normalized narrowly: lowercase scheme and host, default-port removal (`:80` for http, `:443` for https), and fragment removal, with path and query preserved. No cross-site equivalence is attempted, so the same paper behind two unrelated pages collapses only when its DOI or arXiv ID identifies it.
+
 Placement in the pipeline, implemented in `src/zotero_arxiv_daily/executor.py`:
 
 - The state loads before any Zotero or source call.
 - Already-sent candidates are filtered right after the cross-source DOI merge and before pre-rerank enrichment, reranking, and everything downstream, so re-found OpenAlex window overlap costs no enrichment or embedding work.
-- New DOIs are saved only after the SMTP send succeeds; a run that sends nothing, or fails before or during the send, records nothing.
+- New identities are saved only after the SMTP send succeeds, and only when at least one emailed paper has a persistable identity. A run that sends nothing, or fails before or during the send, records nothing.
 
-Two honest limits. Deduplication is DOI-only: papers without a valid DOI always pass through, so they can recur in later emails. And delivery is not exactly-once: if SMTP succeeds but the state upload fails, the email is already out while the workflow reports failure, so the next successful run re-sends those papers once.
+Two honest limits. Papers without a persistable identity always pass through, so they can recur in later emails. And delivery is not exactly-once: if SMTP succeeds but the state upload fails, the email is already out while the workflow reports failure, so the next successful run re-sends those papers once.
+
+State versions and lazy migration. A v1 state written by earlier versions (a plain DOI list) still loads and deduplicates as DOI identities, and loading never rewrites it. The rewrite to the current v2 schema (namespaced `doi:`/`arxiv:`/`url:` identities) is lazy: the first later send that succeeds with at least one identifiable paper saves the merged set as v2. After a v2 save, older application code can no longer read the state and fails closed, leaving the ciphertext intact, until the code is upgraded or the state is deliberately reset.
 
 Corrupt, tampered, or undecryptable state (for example after a key change) fails the run instead of silently resetting. A missing local file starts empty; in GitHub Actions only a genuinely absent state branch starts empty, while an existing branch with a missing file fails closed. The branch lifecycle is described in the GitHub Actions Deployment section.
 
@@ -331,17 +335,17 @@ You can also trigger "Send emails daily" manually at any time via `workflow_disp
 
 ### Encrypted sent-DOI state in Actions
 
-When `SENT_DOI_STATE_ENABLED=true`, the sent-DOI state is persisted inside your repository, because the hosted runner's filesystem is thrown away after every run:
+When `SENT_DOI_STATE_ENABLED=true`, the sent state is persisted inside your repository, because the hosted runner's filesystem is thrown away after every run:
 
-- The state lives on the dedicated branch `sent-doi-state-v1` as the single file `.state/sent-dois.fernet`, containing only Fernet ciphertext. The decrypting key exists solely in the `SENT_DOI_STATE_KEY` Secret, so no plaintext DOI list is ever committed; that is what makes this safe on a public fork.
+- The state lives on the dedicated branch `sent-doi-state-v1` as the single file `.state/sent-dois.fernet`, containing only Fernet ciphertext. The decrypting key exists solely in the `SENT_DOI_STATE_KEY` Secret, so no plaintext identity list is ever committed; that is what makes this safe on a public fork.
 - The state branch is never checked out and never merged. A `github-script` step reads its file metadata through the Contents API, then retrieves the matching base64 ciphertext through the Git Blobs API. This supports GitHub's documented blob limit of 100 MB; larger state fails rather than being truncated. Writes also use the REST contents/git APIs, so your default branch and working tree stay untouched.
-- First creation is atomic: the persist step creates the blob, a tree, and a parentless root commit, then creates the branch ref as the final call. Any failure along the way leaves no branch behind, and the next successful run creates it again. If the branch is absent and the run sends no valid DOI, no local ciphertext is produced and persistence intentionally does nothing, leaving the branch absent.
+- First creation is atomic: the persist step creates the blob, a tree, and a parentless root commit, then creates the branch ref as the final call. Any failure along the way leaves no branch behind, and the next successful run creates it again. If the branch is absent and the run sends no identifiable paper, no local ciphertext is produced and persistence intentionally does nothing, leaving the branch absent.
 - Updates are SHA-guarded: the load step records the state file's blob SHA and the update PUT supplies it. If the file changed in between, the update fails rather than silently overwriting.
 - Loading fails closed when the branch exists but something is wrong: the state file is missing, its content is not valid base64/ciphertext, or it cannot be decrypted with the configured key (the wrong-key case after rotation). The run stops instead of starting from an empty state and re-sending everything. Enabling persistence without a key, or with a value other than `true`/`false`, also fails immediately.
 - Both this workflow and the Test workflow declare the same concurrency group (`sent-doi-state-v1`, `cancel-in-progress: false`), so two runs never read or write the state at the same time; a run that arrives mid-flight waits its turn instead of being canceled. Both jobs request only the job-scoped `contents: write` permission those API calls need, disable checkout credential persistence, and execute the application with `uv run --locked`.
 - The **Test** workflow shares and updates the same state. It runs the full pipeline and really sends papers, so whatever it emails is marked sent and suppressed from later emails too.
 
-Recovery and key rotation: with persistence disabled (`SENT_DOI_STATE_ENABLED=false`), nothing is deduplicated and already-delivered papers can come back. If `SENT_DOI_STATE_KEY` is lost or replaced, the existing ciphertext can no longer be decrypted, and every run fails closed until you intentionally reset the state: delete the `sent-doi-state-v1` branch, then set the new key and re-enable. After a reset, previously sent papers may appear once more.
+Recovery and key rotation: with persistence disabled (`SENT_DOI_STATE_ENABLED=false`), nothing is deduplicated and already-delivered papers can come back. If `SENT_DOI_STATE_KEY` is lost or replaced, the existing ciphertext can no longer be decrypted, and every run fails closed until you intentionally reset the state: delete the `sent-doi-state-v1` branch, then set the new key and re-enable. After a reset, previously sent papers may appear once more. Rolling back application code has one caveat: a v1 state keeps loading, but once any v2 save has happened (including the lazy rewrite on the next successful send) older versions of this project fail closed on the state until they are upgraded or the state is reset, never erasing it (see the Sent-DOI deduplication section).
 
 ## 💻 Local Usage
 
@@ -358,24 +362,24 @@ cd zotero-arxiv-daily
 uv run src/zotero_arxiv_daily/main.py
 ```
 
-Locally the overlay is read from `config/custom.yaml`; write it with the same content you would paste into `CUSTOM_CONFIG`. The `sent_doi_state` section works the same way here: enable it in the overlay (exporting `SENT_DOI_STATE_ENABLED=true` and `SENT_DOI_STATE_KEY` if you reuse the one above) and the encrypted file is written to the git-ignored `.state/sent-dois.fernet` after the first successful send containing a valid DOI.
+Locally the overlay is read from `config/custom.yaml`; write it with the same content you would paste into `CUSTOM_CONFIG`. The `sent_doi_state` section works the same way here: enable it in the overlay (exporting `SENT_DOI_STATE_ENABLED=true` and `SENT_DOI_STATE_KEY` if you reuse the one above) and the encrypted file is written to the git-ignored `.state/sent-dois.fernet` after the first successful send containing at least one identifiable paper.
 
 ## 📖 How It Works
 
 Each run is a linear pipeline (`src/zotero_arxiv_daily/executor.py`):
 
-1. **Load sent-DOI state**: when persistence is enabled, the encrypted delivery state is decrypted before any Zotero or source call (details above).
+1. **Load sent state**: when persistence is enabled, the encrypted delivery state of already-emailed papers is decrypted before any Zotero or source call (details above).
 2. **Fetch Zotero corpus**: all library items of type conferencePaper / journalArticle / preprint that have an abstract.
 3. **Filter corpus**: keep or exclude collections via `zotero.include_path` / `zotero.ignore_path` glob patterns.
 4. **Retrieve new papers concurrently**: every source listed in `executor.source` runs in parallel (up to four at once, failures isolated), the results are flattened in configured source order, and DOI duplicates are merged (details above). Papers are those announced yesterday; `crossref` and `openalex` instead use `lookback_days` completed UTC publication days ending yesterday, and `pubmed` uses `lookback_days` completed UTC entry days.
-5. **Drop already-sent papers**: candidates whose normalized DOI is in the loaded state are removed, after the DOI merge and before enrichment; papers without a valid DOI always pass through (details above).
+5. **Drop already-sent papers**: candidates whose canonical identity is in the loaded state are removed, after the DOI merge and before enrichment; papers without a persistable identity always pass through (details above).
 6. **Pre-rerank enrichment**: optional abstract enrichment and venue citation proxies are applied to the candidate pool (details above).
 7. **Rerank**: embed the **title + abstract** of every candidate and corpus paper, apply the optional venue multiplier, then score, sort, and optionally diversify candidates (details below).
 8. **Keyword pinning**: papers whose title or abstract contains any `executor.pin_keywords` entry (case-insensitive) are split out and pinned; the pinned section is capped at `executor.max_pinned_num`, overflow returns to the ranked pool.
 9. **Relevance floor**: papers scoring below `executor.min_score` are dropped from the ranked pool (pinned papers bypass the floor).
 10. **Top-N cut**: the ranked pool is truncated to `executor.max_paper_num`.
 11. **Lazy enrichment**: only for the final list (pinned + top-N), full text is fetched on demand where missing, then the TL;DR and affiliations are generated concurrently (`executor.enrich_workers` threads) through at most one strict structured JSON request per paper; papers without usable content make no request, and a failed request falls back to the abstract as the TL;DR.
-12. **Render and send**: the HTML email is rendered and sent via SMTP; only after the send succeeds are the emailed DOIs merged back into the sent-DOI state.
+12. **Render and send**: the HTML email is rendered and sent via SMTP; only after the send succeeds are the emailed papers' identities merged back into the sent state.
 
 If nothing survives steps 4-10 and `executor.send_empty` is false, no email is sent.
 

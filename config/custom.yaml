@@ -76,6 +76,6 @@ executor:
   source: ${oc.decode:${oc.env:PAPER_SOURCES,'["arxiv","openalex"]'}}
 
 sent_doi_state:
-  enabled: ${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED,'false'}} # Missing resolves to boolean false (fail closed).
+  enabled: ${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED,'false'}} # Missing resolves to boolean false (fail closed). Cross-run deduplication by paper identity: valid DOI or DOI-resolver URL first, else canonical arXiv ID, else normalized stable URL; DOI-named settings and path are retained legacy names.
   path: .state/sent-dois.fernet
   key: ${oc.env:SENT_DOI_STATE_KEY,null} # Optional Fernet key; required only when enabled.
