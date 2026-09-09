@@ -11,12 +11,9 @@ from .retriever.openalex_errors import MissingOpenAlexCredentialsError
 from .protocol import CorpusPaper, Paper
 from .enrichment.pipeline import build_pipeline_enrichers
 from .final_enrichment import enrich_final_papers
+from .paper_identity import filter_sent_paper_candidates, paper_identities
 from .retrieval import retrieve_and_merge
-from .sent_doi_state import (
-    build_sent_doi_state_store,
-    filter_sent_doi_candidates,
-    normalized_paper_dois,
-)
+from .sent_doi_state import build_sent_doi_state_store
 import random
 from datetime import datetime
 from .reranker import get_reranker_cls
@@ -138,7 +135,7 @@ class Executor:
 
     
     def run(self) -> None:
-        sent_dois = self.sent_doi_state_store.load()
+        sent_identities = self.sent_doi_state_store.load()
         corpus = self.fetch_zotero_corpus()
         corpus = self.filter_corpus(corpus)
         if len(corpus) == 0:
@@ -153,7 +150,7 @@ class Executor:
             )
             return
         all_papers = retrieve_and_merge(self.retrievers)
-        all_papers = filter_sent_doi_candidates(all_papers, sent_dois)
+        all_papers = filter_sent_paper_candidates(all_papers, sent_identities)
         self.pipeline_enrichers.enrich_before_rerank(all_papers)
         logger.info(f"Total {len(all_papers)} papers retrieved from all sources")
         reranked_papers: list[Paper] = []
@@ -181,9 +178,9 @@ class Executor:
         logger.info("Sending email...")
         email_content = render_email(email_papers)
         send_email(self.config, email_content)
-        emailed_dois = normalized_paper_dois(email_papers)
-        if emailed_dois:
-            self.sent_doi_state_store.save(sent_dois | emailed_dois)
+        emailed_identities = paper_identities(email_papers)
+        if emailed_identities:
+            self.sent_doi_state_store.save(sent_identities | emailed_identities)
         logger.info("Email sent successfully")
 
     # ------------------------------------------------------------------

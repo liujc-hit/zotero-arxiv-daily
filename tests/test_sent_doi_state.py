@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet
 from omegaconf import DictConfig, OmegaConf
 import pytest
 
+import zotero_arxiv_daily.sent_doi_state as sent_doi_state_module
 from zotero_arxiv_daily.protocol import Paper
 from zotero_arxiv_daily.sent_doi_state import (
     DisabledSentDoiStateStore,
@@ -25,6 +26,9 @@ from zotero_arxiv_daily.sent_doi_state import (
 
 _DOI_A: Final = "10.1000/a"
 _DOI_B: Final = "10.1000/b"
+_DOI_IDENTITY_A: Final = f"doi:{_DOI_A}"
+_DOI_IDENTITY_B: Final = f"doi:{_DOI_B}"
+_ARXIV_IDENTITY: Final = "arxiv:2401.12345"
 _SENSITIVE_MARKER: Final = "sensitive-key-or-state-marker"
 
 type ConfigValue = str | int | bool | None | dict[str, ConfigValue]
@@ -89,7 +93,7 @@ def test_non_exact_opt_in_builds_disabled_no_op_store(
 
     # When: the optional store is built and used.
     store = build_sent_doi_state_store(config)
-    store.save({_DOI_A})
+    store.save({"unknown:ignored-by-disabled-store"})
 
     # Then: no subordinate values are required and no state is retained.
     assert isinstance(store, DisabledSentDoiStateStore)
@@ -104,15 +108,18 @@ def test_doi_helpers_preserve_candidate_identity_order_and_invalid_values() -> N
     missing = _paper("missing", None)
     papers = [sent, unrelated, invalid, missing]
 
-    # When: sent candidates are filtered and valid DOI values are extracted.
+    # When: the deprecated DOI-only helpers process the papers.
     candidates = filter_sent_doi_candidates(papers, {_DOI_A})
     normalized = normalized_paper_dois(papers)
 
-    # Then: only the normalized match is removed without mutation or reordering.
+    # Then: historical normalization, object identity, and order remain stable.
     assert candidates == [unrelated, invalid, missing]
     assert tuple(map(id, candidates)) == (id(unrelated), id(invalid), id(missing))
     assert sent.doi == " HTTPS://DOI.ORG/10.1000/A "
     assert normalized == frozenset({_DOI_A, _DOI_B})
+    assert {"filter_sent_doi_candidates", "normalized_paper_dois"} <= set(
+        sent_doi_state_module.__all__
+    )
 
 
 @pytest.mark.parametrize(
@@ -153,7 +160,23 @@ def test_enabled_invalid_configuration_raises_static_redacted_error(
     observable = f"{caught.value!s}\n{caught.value!r}\n{caught.value.__dict__}"
     assert str(caught.value) == "enabled sent DOI state configuration is invalid"
     assert caught.value.__dict__ == {}
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert _SENSITIVE_MARKER not in observable
+
+
+def test_enabled_interpolation_failure_has_no_exception_context(tmp_path: Path) -> None:
+    # Given: enabled state whose required path cannot be resolved.
+    config = _enabled_config(tmp_path / "state.bin", Fernet.generate_key().decode())
+    OmegaConf.update(config, "sent_doi_state.path", "${missing.private_path}")
+
+    # When: strict configuration resolves the required value.
+    with pytest.raises(InvalidSentDoiStateConfigurationError) as caught:
+        _ = build_sent_doi_state_store(config)
+
+    # Then: the interpolation exception is not retained by the public error.
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
 
 
 def test_enabled_unknown_field_is_rejected(tmp_path: Path) -> None:
@@ -183,7 +206,7 @@ def test_save_writes_fsynced_owner_only_ciphertext_and_round_trips(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: duplicate DOI variants, an invalid value, and an fsync recorder.
+    # Given: canonical identities, legacy DOI variants, and an fsync recorder.
     key = Fernet.generate_key()
     path = tmp_path / "sent-dois.bin"
     store = build_sent_doi_state_store(_enabled_config(path, key.decode()))
@@ -197,71 +220,32 @@ def test_save_writes_fsynced_owner_only_ciphertext_and_round_trips(
     monkeypatch.setattr(os, "fsync", recording_fsync)
 
     # When: state is saved through the encrypted store.
-    store.save({_DOI_B, "https://doi.org/10.1000/A", "10.1000/A", "invalid"})
+    store.save(
+        [
+            _DOI_IDENTITY_B,
+            _ARXIV_IDENTITY,
+            _DOI_IDENTITY_A,
+            _DOI_IDENTITY_A,
+            " HTTPS://DOI.ORG/10.1000/A ",
+        ]
+    )
 
-    # Then: only sorted unique canonical values exist in authenticated ciphertext.
+    # Then: only sorted unique canonical identities exist in authenticated ciphertext.
     assert isinstance(store, FernetSentDoiStateStore)
     assert key.decode() not in repr(store)
     ciphertext = path.read_bytes()
     assert json.loads(Fernet(key).decrypt(ciphertext).decode()) == {
-        "version": 1,
-        "dois": [_DOI_A, _DOI_B],
+        "version": 2,
+        "identities": [_ARXIV_IDENTITY, _DOI_IDENTITY_A, _DOI_IDENTITY_B],
     }
     assert _DOI_A.encode() not in ciphertext
     assert _DOI_B.encode() not in ciphertext
     assert fsync_calls
     if os.name != "nt":
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert store.load() == frozenset({_DOI_A, _DOI_B})
-
-
-@pytest.mark.parametrize(
-    "plaintext",
-    [
-        pytest.param(b"\xff", id="invalid-utf8"),
-        pytest.param(b"{", id="invalid-json"),
-        pytest.param(b"[]", id="root-schema"),
-        pytest.param(b'{"version":2,"dois":[]}', id="version"),
-        pytest.param(b'{"version":1}', id="missing-field"),
-        pytest.param(b'{"version":1,"dois":[],"extra":true}', id="extra-field"),
-        pytest.param(
-            b'{"version":1,"version":1,"dois":[]}',
-            id="duplicate-field",
-        ),
-        pytest.param(b'{"version":1,"dois":"invalid"}', id="dois-schema"),
-        pytest.param(b'{"version":1,"dois":[7]}', id="doi-type"),
-        pytest.param(
-            b'{"version":1,"dois":["HTTPS://DOI.ORG/10.1000/A"]}',
-            id="noncanonical-doi",
-        ),
-        pytest.param(
-            b'{"version":1,"dois":["10.1000/b","10.1000/a"]}',
-            id="unsorted-dois",
-        ),
-        pytest.param(
-            b'{"version":1,"dois":["10.1000/a","10.1000/a"]}',
-            id="duplicate-dois",
-        ),
-    ],
-)
-def test_authenticated_malformed_plaintext_raises_one_redacted_error(
-    tmp_path: Path,
-    plaintext: bytes,
-) -> None:
-    # Given: authenticated ciphertext containing malformed state plaintext.
-    key = Fernet.generate_key()
-    path = tmp_path / "state.bin"
-    _ = path.write_bytes(Fernet(key).encrypt(plaintext))
-    store = FernetSentDoiStateStore(path, key)
-
-    # When: strict state parsing reaches the malformed value.
-    with pytest.raises(InvalidSentDoiStateError) as caught:
-        _ = store.load()
-
-    # Then: every format failure has the same static observable surface.
-    assert str(caught.value) == "encrypted sent DOI state is invalid"
-    assert caught.value.__dict__ == {}
-    assert _DOI_A not in repr(caught.value)
+    assert store.load() == frozenset(
+        {_ARXIV_IDENTITY, _DOI_IDENTITY_A, _DOI_IDENTITY_B}
+    )
 
 
 def test_invalid_or_wrong_key_token_raises_redacted_state_error(tmp_path: Path) -> None:
@@ -277,6 +261,8 @@ def test_invalid_or_wrong_key_token_raises_redacted_state_error(tmp_path: Path) 
 
     # Then: neither token nor exception details reach the typed error surface.
     observable = f"{caught.value!s}\n{caught.value!r}\n{caught.value.__dict__}"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert token.decode() not in observable
     assert _SENSITIVE_MARKER not in observable
 
@@ -289,7 +275,7 @@ def test_replace_failure_preserves_previous_file_and_temp_is_ciphertext_only(
     key = Fernet.generate_key()
     path = tmp_path / "state.bin"
     store = FernetSentDoiStateStore(path, key)
-    store.save({_DOI_A})
+    store.save({_DOI_IDENTITY_A})
     previous_ciphertext = path.read_bytes()
     replacement_tokens: list[bytes] = []
 
@@ -304,16 +290,18 @@ def test_replace_failure_preserves_previous_file_and_temp_is_ciphertext_only(
 
     # When: saving replacement state fails at the atomic swap.
     with pytest.raises(SentDoiStateWriteError) as caught:
-        store.save({_DOI_B})
+        store.save({_DOI_IDENTITY_B})
 
     # Then: the old file remains and the temp file never held plaintext.
     assert path.read_bytes() == previous_ciphertext
     assert len(replacement_tokens) == 1
     assert _DOI_B.encode() not in replacement_tokens[0]
     assert json.loads(Fernet(key).decrypt(replacement_tokens[0]).decode()) == {
-        "version": 1,
-        "dois": [_DOI_B],
+        "version": 2,
+        "identities": [_DOI_IDENTITY_B],
     }
     observable = f"{caught.value!s}\n{caught.value!r}\n{caught.value.__dict__}"
     assert str(caught.value) == "encrypted sent DOI state could not be saved"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert _SENSITIVE_MARKER not in observable

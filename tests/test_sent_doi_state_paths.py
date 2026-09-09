@@ -22,8 +22,8 @@ from zotero_arxiv_daily.sent_doi_state import (
     SentDoiStateWriteError,
 )
 
-_DOI_A: Final = "10.1000/a"
-_DOI_B: Final = "10.1000/b"
+_IDENTITY_A: Final = "doi:10.1000/a"
+_IDENTITY_B: Final = "arxiv:2401.12345"
 _REPO_ROOT: Final = Path(__file__).resolve().parent.parent
 _GITIGNORE_PATH: Final = _REPO_ROOT / ".gitignore"
 
@@ -56,13 +56,13 @@ def test_save_then_load_round_trips_through_newly_created_parent(
     assert store.load() == frozenset()
 
     # When: state is saved through the encrypted store after bootstrap.
-    store.save({_DOI_A, _DOI_B})
+    store.save({_IDENTITY_A, _IDENTITY_B})
 
     # Then: the file is written inside the freshly created parent and the
-    # canonical DOIs round-trip through a fresh store reading the same path.
+    # canonical identities round-trip through a fresh store reading the same path.
     assert nested_path.is_file()
     other_store = FernetSentDoiStateStore(nested_path, key)
-    assert other_store.load() == frozenset({_DOI_A, _DOI_B})
+    assert other_store.load() == frozenset({_IDENTITY_A, _IDENTITY_B})
 
 
 def test_load_mkdir_failure_raises_static_redacted_write_error(
@@ -93,6 +93,8 @@ def test_load_mkdir_failure_raises_static_redacted_write_error(
     observable = f"{caught.value!s}\n{caught.value!r}\n{caught.value.__dict__}"
     assert str(caught.value) == "encrypted sent DOI state could not be saved"
     assert caught.value.__dict__ == {}
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert str(sentinel) not in observable
     assert str(blocked_path) not in observable
 
@@ -133,6 +135,7 @@ def test_load_non_missing_read_failure_raises_static_redacted_state_error(
     observable = f"{caught.value!s}\n{caught.value!r}\n{caught.value.__dict__}"
     assert str(caught.value) == "encrypted sent DOI state is invalid"
     assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert caught.value.__dict__ == {}
     assert sensitive_detail not in observable
     assert str(state_path) not in observable

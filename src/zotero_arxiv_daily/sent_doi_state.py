@@ -1,35 +1,33 @@
-"""Authenticated local persistence for DOI delivery state."""
+"""Encrypted local persistence for authenticated paper-identity state."""
 
 import json
 import os
 import tempfile
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Collection, Iterable
 from contextlib import suppress
 from pathlib import Path
-from typing import ClassVar, Final, Never, Protocol, TypeVar, TypedDict, final
+from typing import ClassVar, Final, Never, Protocol, TypeVar, final
 
 from cryptography.fernet import Fernet, InvalidToken
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 
 from .identifiers import normalize_doi
+from .paper_identity import PaperIdentity
+from .sent_doi_state_codec import (
+    InvalidSentDoiStateError,
+    SentDoiStateWriteError,
+    decode_sent_state,
+    encode_sent_state,
+)
 
 
-_STATE_VERSION: Final = 1
 _STATE_FILE_MODE: Final = 0o600
 _CONFIG_FIELDS: Final = frozenset({"enabled", "path", "key"})
 
 type _ConfigValue = str | int | float | bool | None | DictConfig | ListConfig
-type _JsonValue = (
-    str | int | float | bool | None | list[_JsonValue] | dict[str, _JsonValue]
-)
 
 _DoiPaperT = TypeVar("_DoiPaperT", bound="_DoiPaper")
-
-
-class _StatePayload(TypedDict):
-    version: int
-    dois: list[str]
 
 
 class _DoiPaper(Protocol):
@@ -48,24 +46,16 @@ class _ConfigSelector(Protocol):
     ) -> _ConfigValue: ...
 
 
-class _JsonLoader(Protocol):
-    def __call__(
-        self,
-        s: str,
-        *,
-        object_pairs_hook: Callable[
-            [list[tuple[str, _JsonValue]]],
-            dict[str, _JsonValue],
-        ],
-    ) -> _JsonValue: ...
-
-
 class SentDoiStateStore(Protocol):
-    """Load and replace the complete set of sent canonical DOIs."""
+    """Load and replace the complete set of sent canonical paper identities."""
 
-    def load(self) -> frozenset[str]: ...
+    def load(self) -> frozenset[PaperIdentity]:
+        """Load canonical namespaced paper identities."""
+        ...
 
-    def save(self, dois: Collection[str]) -> None: ...
+    def save(self, identities: Collection[str]) -> None:
+        """Replace state with canonical namespaced paper identities."""
+        ...
 
 
 class InvalidSentDoiStateConfigurationError(ValueError):
@@ -77,34 +67,16 @@ class InvalidSentDoiStateConfigurationError(ValueError):
         super().__init__(self.message)
 
 
-class InvalidSentDoiStateError(ValueError):
-    """Report unauthentic or malformed state without retaining its contents."""
-
-    message: ClassVar[str] = "encrypted sent DOI state is invalid"
-
-    def __init__(self) -> None:
-        super().__init__(self.message)
-
-
-class SentDoiStateWriteError(RuntimeError):
-    """Report a failed atomic save without retaining the OS failure."""
-
-    message: ClassVar[str] = "encrypted sent DOI state could not be saved"
-
-    def __init__(self) -> None:
-        super().__init__(self.message)
-
-
-class _DuplicateJsonKeyError(ValueError):
-    """Mark a JSON object that cannot satisfy the strict state schema."""
-
-
 def _invalid_configuration() -> Never:
     raise InvalidSentDoiStateConfigurationError from None
 
 
 def _invalid_state() -> Never:
     raise InvalidSentDoiStateError from None
+
+
+def _invalid_write() -> Never:
+    raise SentDoiStateWriteError from None
 
 
 def _select_soft(
@@ -127,10 +99,15 @@ def _read_required(
 ) -> _ConfigValue:
     if key not in section:
         _invalid_configuration()
+    value: _ConfigValue = None
+    resolution_failed = False
     try:
-        return selector(section, key, throw_on_resolution_failure=True)
+        value = selector(section, key, throw_on_resolution_failure=True)
     except OmegaConfBaseException:
+        resolution_failed = True
+    if resolution_failed:
         _invalid_configuration()
+    return value
 
 
 def _normalized_dois(values: Iterable[str | None]) -> frozenset[str]:
@@ -141,63 +118,22 @@ def _normalized_dois(values: Iterable[str | None]) -> frozenset[str]:
     )
 
 
-def _reject_duplicate_keys(
-    pairs: list[tuple[str, _JsonValue]],
-) -> dict[str, _JsonValue]:
-    parsed: dict[str, _JsonValue] = {}
-    for key, value in pairs:
-        if key in parsed:
-            raise _DuplicateJsonKeyError from None
-        parsed[key] = value
-    return parsed
-
-
-def _parse_plaintext(plaintext: bytes, loader: _JsonLoader) -> frozenset[str]:
-    try:
-        decoded = plaintext.decode("utf-8")
-    except UnicodeDecodeError:
-        _invalid_state()
-
-    try:
-        payload = loader(decoded, object_pairs_hook=_reject_duplicate_keys)
-    except (json.JSONDecodeError, _DuplicateJsonKeyError):
-        _invalid_state()
-
-    if not isinstance(payload, dict) or set(payload) != {"version", "dois"}:
-        _invalid_state()
-    version = payload["version"]
-    raw_dois = payload["dois"]
-    if type(version) is not int or version != _STATE_VERSION:
-        _invalid_state()
-    if not isinstance(raw_dois, list):
-        _invalid_state()
-
-    canonical_dois: list[str] = []
-    for raw_doi in raw_dois:
-        if not isinstance(raw_doi, str) or normalize_doi(raw_doi) != raw_doi:
-            _invalid_state()
-        canonical_dois.append(raw_doi)
-    if canonical_dois != sorted(set(canonical_dois)):
-        _invalid_state()
-    return frozenset(canonical_dois)
-
-
 @final
 class DisabledSentDoiStateStore:
     """No-op store used unless authenticated persistence is exactly enabled."""
 
     __slots__ = ()
 
-    def load(self) -> frozenset[str]:
+    def load(self) -> frozenset[PaperIdentity]:
         return frozenset()
 
-    def save(self, dois: Collection[str]) -> None:
-        del dois
+    def save(self, identities: Collection[str]) -> None:
+        del identities
 
 
 @final
 class FernetSentDoiStateStore:
-    """Persist one authenticated encrypted snapshot with atomic replacement."""
+    """Persist one authenticated encrypted paper-identity snapshot atomically."""
 
     __slots__ = ("_fernet", "_path")
 
@@ -208,42 +144,55 @@ class FernetSentDoiStateStore:
         path_value = str(path).strip()
         if not path_value:
             _invalid_configuration()
+        fernet: Fernet | None = None
+        invalid_key = False
         try:
             fernet = Fernet(key)
         except (TypeError, ValueError):
+            invalid_key = True
+        if invalid_key or fernet is None:
             _invalid_configuration()
         self._path = Path(path_value)
         self._fernet = fernet
 
-    def load(self) -> frozenset[str]:
+    def load(self) -> frozenset[PaperIdentity]:
+        mkdir_failed = False
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
-            raise SentDoiStateWriteError from None
+            mkdir_failed = True
+        if mkdir_failed:
+            _invalid_write()
+
+        ciphertext: bytes | None = None
+        missing = False
+        read_failed = False
         try:
             ciphertext = self._path.read_bytes()
         except FileNotFoundError:
-            return frozenset()
+            missing = True
         except OSError:
+            read_failed = True
+        if missing:
+            return frozenset()
+        if read_failed or ciphertext is None:
             _invalid_state()
+
+        plaintext: bytes | None = None
+        decrypt_failed = False
         try:
             plaintext = self._fernet.decrypt(ciphertext)
         except InvalidToken:
+            decrypt_failed = True
+        if decrypt_failed or plaintext is None:
             _invalid_state()
-        return _parse_plaintext(plaintext, json.loads)
+        return decode_sent_state(plaintext, json.loads)
 
-    def save(self, dois: Collection[str]) -> None:
-        payload: _StatePayload = {
-            "version": _STATE_VERSION,
-            "dois": sorted(_normalized_dois(dois)),
-        }
-        plaintext = json.dumps(
-            payload,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
+    def save(self, identities: Collection[str]) -> None:
+        plaintext = encode_sent_state(identities)
         ciphertext = self._fernet.encrypt(plaintext)
 
+        write_failed = False
         try:
             file_descriptor, temporary_name = tempfile.mkstemp(
                 prefix=f".{self._path.name}.",
@@ -263,7 +212,9 @@ class FernetSentDoiStateStore:
                 with suppress(FileNotFoundError):
                     temporary_path.unlink()
         except OSError:
-            raise SentDoiStateWriteError from None
+            write_failed = True
+        if write_failed:
+            _invalid_write()
 
 
 def build_sent_doi_state_store(config: DictConfig) -> SentDoiStateStore:
@@ -290,7 +241,7 @@ def filter_sent_doi_candidates(
     papers: Iterable[_DoiPaperT],
     sent_dois: Collection[str],
 ) -> list[_DoiPaperT]:
-    """Keep papers without a valid DOI already present in sent state."""
+    """Deprecated: keep papers whose valid DOI is absent from DOI-only state."""
     normalized_sent_dois = _normalized_dois(sent_dois)
     return [
         paper
@@ -300,7 +251,7 @@ def filter_sent_doi_candidates(
 
 
 def normalized_paper_dois(papers: Iterable[_DoiPaper]) -> frozenset[str]:
-    """Extract unique canonical valid DOI values from papers."""
+    """Deprecated: extract canonical DOI values; use paper_identities instead."""
     return _normalized_dois(paper.doi for paper in papers)
 
 

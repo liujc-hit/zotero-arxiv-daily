@@ -1,4 +1,4 @@
-"""Executor integration contracts for sent-DOI delivery state."""
+"""Executor integration contracts for sent-paper delivery state."""
 
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
@@ -12,11 +12,14 @@ import pytest
 import zotero_arxiv_daily.executor as executor_module
 from zotero_arxiv_daily.enrichment.pipeline import PipelineEnrichers
 from zotero_arxiv_daily.executor import Executor
+from zotero_arxiv_daily.paper_identity import (
+    PaperIdentity,
+    filter_sent_paper_candidates,
+)
 from zotero_arxiv_daily.protocol import CorpusPaper, Paper
 from zotero_arxiv_daily.sent_doi_state import (
     DisabledSentDoiStateStore,
     SentDoiStateWriteError,
-    filter_sent_doi_candidates,
 )
 
 
@@ -24,6 +27,9 @@ OLD_DOI: Final = "10.1000/old"
 PINNED_DOI: Final = "10.1000/pinned"
 TOP_DOI: Final = "10.1000/top"
 EXCLUDED_DOI: Final = "10.1000/excluded"
+OLD_IDENTITY: Final = PaperIdentity(f"doi:{OLD_DOI}")
+PINNED_IDENTITY: Final = PaperIdentity(f"doi:{PINNED_DOI}")
+TOP_IDENTITY: Final = PaperIdentity(f"doi:{TOP_DOI}")
 
 
 class StateLoadFailure(RuntimeError):
@@ -77,20 +83,20 @@ class RecordingStateStore:
 
     def __init__(self, events: list[str]) -> None:
         self.events = events
-        self.loaded = frozenset[str]()
+        self.loaded = frozenset[PaperIdentity]()
         self.load_failure: StateLoadFailure | None = None
         self.save_failure: SentDoiStateWriteError | None = None
         self.saved: list[frozenset[str]] = []
 
-    def load(self) -> frozenset[str]:
+    def load(self) -> frozenset[PaperIdentity]:
         self.events.append("load")
         if self.load_failure is not None:
             raise self.load_failure
         return self.loaded
 
-    def save(self, dois: Collection[str]) -> None:
+    def save(self, identities: Collection[str]) -> None:
         self.events.append("save")
-        self.saved.append(frozenset(dois))
+        self.saved.append(frozenset(identities))
         if self.save_failure is not None:
             raise self.save_failure
 
@@ -109,7 +115,7 @@ def paper(title: str, doi: str | None = None, score: float = 1.0) -> Paper:
         title=title,
         authors=[],
         abstract="Abstract.",
-        url=f"https://papers.example/{title}",
+        url=f"https://papers.example/{title.replace(' ', '-')}",
         full_text="Full text.",
         score=score,
         doi=doi,
@@ -220,7 +226,7 @@ def test_run_merges_before_filtering_and_keeps_invalid_dois_eligible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a sent duplicate pair plus invalid and missing DOI candidates.
-    runtime.store.loaded = frozenset({OLD_DOI})
+    runtime.store.loaded = frozenset({OLD_IDENTITY})
     winner = paper("winner", "HTTPS://DOI.ORG/10.1000/OLD")
     winner.abstract = ""
     duplicate = paper("duplicate", OLD_DOI)
@@ -238,12 +244,15 @@ def test_run_merges_before_filtering_and_keeps_invalid_dois_eligible(
     runtime.executor.pipeline_enrichers = PipelineEnrichers(abstract=enricher)
     merged_inputs: list[list[Paper]] = []
 
-    def record_filter(papers: list[Paper], sent_dois: Collection[str]) -> list[Paper]:
+    def record_filter(
+        papers: list[Paper],
+        sent_identities: Collection[str],
+    ) -> list[Paper]:
         runtime.events.append("filter")
         merged_inputs.append(list(papers))
-        return filter_sent_doi_candidates(papers, sent_dois)
+        return filter_sent_paper_candidates(papers, sent_identities)
 
-    monkeypatch.setattr(executor_module, "filter_sent_doi_candidates", record_filter)
+    monkeypatch.setattr(executor_module, "filter_sent_paper_candidates", record_filter)
 
     # When: Executor retrieves, merges, filters, enriches, and reranks.
     runtime.executor.run()
