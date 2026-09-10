@@ -65,7 +65,10 @@ def test_ieee_uses_fixed_endpoint_and_first_matching_article(
         Call(
             "https://ieeexploreapi.ieee.org/api/v1/search/articles",
             {"apikey": SECRET, "doi": doi},
-            {"Accept": "application/json"},
+            {
+                "Accept": "application/json",
+                "User-Agent": "zotero-arxiv-daily",
+            },
             calls[0].timeout,
             False,
         )

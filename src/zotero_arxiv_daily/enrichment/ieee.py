@@ -18,6 +18,7 @@ from .transport import (
 )
 
 _IEEE_ENDPOINT: Final = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
+_IEEE_USER_AGENT: Final = "zotero-arxiv-daily"
 
 
 @final
@@ -50,7 +51,10 @@ class IEEEAdapter:
                     "apikey": (self._settings.api_key or "").strip(),
                     "doi": doi,
                 },
-                headers={"Accept": "application/json"},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": _IEEE_USER_AGENT,
+                },
             ),
             self._pacer,
         )
