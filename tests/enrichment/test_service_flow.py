@@ -248,6 +248,23 @@ def test_only_first_two_matches_are_attempted_when_both_return_blank() -> None:
     assert paper.abstract == ""
 
 
+def test_quota_exhausted_ieee_falls_back_to_second_matched_provider() -> None:
+    # Given an IEEE paper whose second matched provider also covers its ISSN
+    paper = blank_published_paper()
+    paper.doi = "10.1109/quota-fallback"
+    paper.publisher = "IEEE Computer Society"
+    paper.issns = (IEEE_ISSN, PUBMED_ISSN)
+    probe = AdapterProbe()
+    probe.ieee.result = None
+
+    # When the IEEE attempt fails without producing an abstract
+    AbstractEnricher(_enabled_settings(), probe.bundle()).enrich([paper])
+
+    # Then the second matched provider still enriches that paper
+    assert probe.attempts == ["ieee", "pubmed"]
+    assert paper.abstract == "pubmed abstract"
+
+
 def test_unexpected_adapter_exception_propagates_without_fallback() -> None:
     # Given a matched primary that raises and a positively matched alternate
     paper = blank_published_paper()

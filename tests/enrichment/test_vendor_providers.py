@@ -245,6 +245,110 @@ def test_http_status_failure_has_exactly_one_attempt(
     assert len(calls) == 1
 
 
+def test_ieee_consecutive_418s_trip_the_breaker_and_skip_remaining_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given five consecutive Mashery quota rejections and a forbidden sixth call
+    rejected = lambda: Response(status_code=418, payload={"private": PRIVATE_BODY})  # noqa: E731
+    calls = install_get(
+        monkeypatch,
+        (
+            rejected,
+            rejected,
+            rejected,
+            rejected,
+            rejected,
+            lambda: pytest.fail("quota-disabled IEEE attempted another HTTP request"),
+        ),
+    )
+    adapter = IEEEAdapter(IeeeSettings(enabled=True, api_key=SECRET))
+    rendered: list[str] = []
+    sink = logger.add(rendered.append, format="{message}")
+
+    try:
+        # When five eligible DOIs each meet a quota rejection
+        outcomes = [
+            adapter.fetch_abstract(f"10.1109/quota-{index}") for index in range(5)
+        ]
+        # Then the breaker trips only on the fifth rejection, not before
+        assert outcomes == [None] * 5
+        assert len(calls) == 5
+        joined_logs = "\n".join(rendered)
+        assert joined_logs.count("IEEE HTTP status 418") == 5
+        assert joined_logs.count("disabled for this run") == 1
+
+        # When a sixth DOI arrives after the breaker has tripped
+        sixth = adapter.fetch_abstract("10.1109/later")
+    finally:
+        logger.remove(sink)
+
+    # Then the sixth DOI is skipped silently with no further HTTP call
+    assert sixth is None
+    assert len(calls) == 5
+    log_text = "\n".join(rendered)
+    assert (
+        "IEEE quota exhausted after 5 consecutive rejections; disabled for this run"
+        in log_text
+    )
+    assert log_text.count("disabled for this run") == 1
+    assert all(value not in log_text for value in (SECRET, PRIVATE_DOI, PRIVATE_BODY))
+
+
+def test_ieee_non_consecutive_418s_never_trip_the_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given quota rejections interleaved with successful responses
+    success = lambda: Response(payload={"articles": [{"doi": "10.1109/ok", "abstract": "Abstract"}]})  # noqa: E731
+    rejected = lambda: Response(status_code=418, payload={"private": PRIVATE_BODY})  # noqa: E731
+    calls = install_get(
+        monkeypatch,
+        (
+            rejected,
+            success,
+            rejected,
+            success,
+            rejected,
+            success,
+            rejected,
+            success,
+            rejected,
+            success,
+        ),
+    )
+    adapter = IEEEAdapter(IeeeSettings(enabled=True, api_key=SECRET))
+
+    # When rejections and successes alternate across ten fetches
+    abstracts = [adapter.fetch_abstract("10.1109/ok") for _ in range(10)]
+
+    # Then the consecutive counter resets on each success and the breaker holds
+    assert abstracts == [None, "Abstract"] * 5
+    assert len(calls) == 10
+    assert adapter._quota_available.is_set()
+
+
+def test_ieee_non_418_failure_keeps_provider_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a transient non-quota HTTP failure followed by a valid article
+    doi = "10.1109/recovered"
+    calls = install_get(
+        monkeypatch,
+        (
+            lambda: Response(status_code=503),
+            lambda: Response(payload={"articles": [{"doi": doi, "abstract": "Retry"}]}),
+        ),
+    )
+    adapter = IEEEAdapter(IeeeSettings(enabled=True, api_key=SECRET))
+
+    # When a failed attempt precedes a later successful fetch
+    first = adapter.fetch_abstract(doi)
+    second = adapter.fetch_abstract(doi)
+
+    # Then only the quota status disables the provider; 503 does not
+    assert (first, second) == (None, "Retry")
+    assert len(calls) == 2
+
+
 def test_invalid_json_has_exactly_one_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
