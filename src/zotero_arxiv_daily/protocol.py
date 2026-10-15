@@ -16,6 +16,7 @@ from .llm import (
     UnsupportedThinkingError,
     _request_llm,
 )
+from .paper_presentation import PaperPresentation
 
 __all__ = (
     "ApiMode",
@@ -55,6 +56,7 @@ class Paper:
     is_preprint: bool | None = None
     venue_citation_proxy: float | None = None
     journal: str | None = None
+    presentation: PaperPresentation | None = None
 
     def generate_tldr_and_affiliations(
         self,
