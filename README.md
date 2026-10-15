@@ -36,6 +36,7 @@
 - Optional pre-rerank abstract enrichment for published papers missing an abstract: providers are routed directly, in the fixed priority IEEE Xplore > Elsevier > Springer Nature > PubMed, at most two matched providers are attempted per paper, and the first nonblank abstract wins.
 - Optional venue prestige weighting built from OpenAlex's open citation statistics.
 - AI-generated TL;DR and resolved author affiliations for every paper in the email, through at most one strict structured LLM request per paper.
+- English/Chinese titles, full abstracts and TL;DRs, plus best-effort first research figures embedded in email; both features default on with independent opt-outs.
 - Links to PDF and code implementation (when available) in the email.
 - Keyword pinning force-matches topics you care about to the top of the email.
 - Curate which Zotero collections drive recommendations using glob patterns.
@@ -87,7 +88,9 @@
    | SPRINGER_ENABLED | No | Enables the Springer Nature enrichment vertical. Default `false`. | true |
    | VENUE_PRESTIGE_ENABLED | No | Enables OpenAlex venue citation proxy weighting in the reranker. Default `false`. | true |
    | OPENALEX_ALLOW_ANONYMOUS | No | Only an explicit `true` lets OpenAlex fall back to keyless anonymous requests when no configured key is usable. Anything else (including unset) means no anonymous access; a requested `openalex` source with no key is then replaced by `crossref` at startup. | true |
-   | SENT_DOI_STATE_ENABLED | No | Enables persistent cross-run deduplication: papers whose identity (valid DOI or DOI-resolver URL, else canonical arXiv ID, else normalized stable URL) was already emailed are skipped in later runs. The DOI-named variable is a retained legacy name. Requires the `SENT_DOI_STATE_KEY` Secret. Unset (and anything but `true`) resolves to `false`. | true |
+    | SENT_DOI_STATE_ENABLED | No | Enables persistent cross-run deduplication: papers whose identity (valid DOI or DOI-resolver URL, else canonical arXiv ID, else normalized stable URL) was already emailed are skipped in later runs. The DOI-named variable is a retained legacy name. Requires the `SENT_DOI_STATE_KEY` Secret. Unset (and anything but `true`) resolves to `false`. | true |
+    | EMAIL_BILINGUAL_ENABLED | No | With the overlay below, enables English/Chinese title, abstract and TL;DR presentation. Defaults to `true`; set `false` for legacy single-language digests. | false |
+    | EMAIL_FIGURES_ENABLED | No | With the overlay below, enables best-effort first research figures. Defaults to `true`, independently of bilingual presentation. | false |
 
 4. Paste this full-capability configuration into the value of `CUSTOM_CONFIG`. Every optional feature is present and wired to a repository Variable or Secret, so toggling a feature never means editing YAML:
    ![custom_config](./assets/config_var.png)
@@ -104,6 +107,10 @@
       smtp_server: smtp.qq.com
       smtp_port: 465
       sender_password: ${oc.env:SENDER_PASSWORD}
+      bilingual:
+        enabled: ${oc.decode:${oc.env:EMAIL_BILINGUAL_ENABLED,'true'}}
+      figures:
+        enabled: ${oc.decode:${oc.env:EMAIL_FIGURES_ENABLED,'true'}}
 
     llm:
       api:
@@ -237,10 +244,57 @@ Configuration is composed with Hydra/OmegaConf from `config/base.yaml` (defaults
 | Key | Effect |
 | :--- | :--- |
 | `zotero.ignore_path` | Glob patterns of Zotero collections to exclude from the corpus. |
-| `llm.language` | Language of the generated TL;DRs (default English). |
+| `llm.language` | Language of the legacy TL;DR field (default English); bilingual presentation supplies English and Chinese independently. |
 
 >[!NOTE]
 > MiniMax thinking: `llm.thinking: disabled` maps to `extra_body.thinking.type=disabled` in Chat Completions mode and `reasoning.effort=none` in Responses mode, and only for the exact model `MiniMax-M3`. MiniMax-M2-family models (M2, M2.1, M2.5, M2.7 and their highspeed variants) cannot disable thinking and must use `thinking: null`.
+
+### Bilingual presentation and first figures
+
+Both `email.bilingual.enabled` and `email.figures.enabled` default to `true` in
+`config/base.yaml`. Set either to the YAML boolean `false` in your overlay, or use
+`email.bilingual.enabled=false` / `email.figures.enabled=false` as Hydra CLI
+overrides. The two `EMAIL_*_ENABLED` Variables above work when you use the shown
+overlay; they are not additional workflow secrets or automatic environment mappings.
+Disabling both restores the legacy positional enrichment call and HTML/digest path,
+without requiring presentation keywords from existing integrations. `llm.language` still chooses
+the legacy TL;DR field; bilingual presentation explicitly supplies both languages.
+
+- **Coverage:** bilingual title, complete abstract translation and one-sentence
+  TL;DR share the same single structured LLM request as affiliations. Source title
+  and abstract, author metadata, DOI/URL identity, score, pinning and recommendation
+  order are not replaced. Only the final pinned + top-N list is enriched, never
+  the discarded candidate pool. Existing retrieval, abstract-enrichment and venue
+  weighting settings remain independent.
+- **Fallback:** unavailable/invalid translations leave the original source text
+  visible rather than inventing a translation. The legacy digest falls back to
+  the abstract (or the existing no-content/failure indicator). Optional figure
+  failures omit the image without removing the paper or failing delivery.
+  Figure discovery covers explicitly labeled Figure 1 on arXiv HTML and
+  bioRxiv/medRxiv HTML pages, using original verified PNG/JPEG bytes from the same
+  source host. Publisher pages, PDF-only papers, SVG/vector-only figures, separate
+  panels and ambiguous/missing figures are omitted; there is no PDF screenshot
+  fallback. Logos and arbitrary remote images are not research figures.
+  No figure is a valid outcome.
+- **Cost and bounds:** bilingual output requires more tokens than a single-language
+  digest, but does not add a second LLM call. The shared OpenAI client uses a
+  45-second request timeout with SDK retries disabled. Final enrichment runs at
+  most `min(executor.enrich_workers, 4, selected_count)` workers. Figure retrieval
+  adds bounded network/image processing, not an LLM call; disabling figures avoids
+  that optional work. Each figure attempt has a 15-second overall deadline,
+  2-MiB response/image limits and a 16-million-pixel decode cap; HTTPS host and
+  public-IP checks constrain requests and redirects. Accepted raw image bytes are capped at 8 MiB per email in
+  final display order (pinned first), regardless of worker completion order.
+  MIME/base64 overhead increases the actual message size beyond raw image bytes.
+- **Delivery:** figures travel as inline CID attachments with a plain-text
+  alternative, not tracking-image requests from the recipient. Encrypted sent
+  state is still saved only after SMTP succeeds; failed sends record no papers.
+- **Integration provenance:** this is a local, conflict-aware integration on top
+  of the RSS retrieval and structured-digest work. Presentation is a separate
+  optional record: it does not replace RSS identity fields, alter DOI merge
+  precedence, rerank translated text, or change the pinned/top-N selection rules.
+  A local integration is not a claim that a GitHub PR has been merged or deployed;
+  scheduled Actions use only code merged into the repository's default branch.
 
 ### OpenAlex source
 
@@ -378,8 +432,8 @@ Each run is a linear pipeline (`src/zotero_arxiv_daily/executor.py`):
 8. **Keyword pinning**: papers whose title or abstract contains any `executor.pin_keywords` entry (case-insensitive) are split out and pinned; the pinned section is capped at `executor.max_pinned_num`, overflow returns to the ranked pool.
 9. **Relevance floor**: papers scoring below `executor.min_score` are dropped from the ranked pool (pinned papers bypass the floor).
 10. **Top-N cut**: the ranked pool is truncated to `executor.max_paper_num`.
-11. **Lazy enrichment**: only for the final list (pinned + top-N), full text is fetched on demand where missing, then the TL;DR and affiliations are generated concurrently (`executor.enrich_workers` threads) through at most one strict structured JSON request per paper; papers without usable content make no request, and a failed request falls back to the abstract as the TL;DR.
-12. **Render and send**: the HTML email is rendered and sent via SMTP; only after the send succeeds are the emailed papers' identities merged back into the sent state.
+11. **Lazy enrichment**: only for the final list (pinned + top-N), full text is fetched on demand where missing, then bilingual presentation (default on), TL;DR and affiliations share at most one strict structured JSON request per paper. At most four workers run, bounded further by `executor.enrich_workers`; papers without usable content make no request, and a failed request falls back to the abstract as the TL;DR. Optional first figures are fetched here and admitted within an 8-MiB raw-image budget in final display order.
+12. **Render and send**: the email retains the existing card layout with optional bilingual fields and inline figures, plus a plain-text alternative; only after SMTP succeeds are the emailed papers' identities merged back into the sent state. Both feature flags off keep the legacy HTML path.
 
 If nothing survives steps 4-10 and `executor.send_empty` is false, no email is sent.
 
