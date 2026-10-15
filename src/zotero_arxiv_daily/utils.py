@@ -155,6 +155,13 @@ def send_email(config:DictConfig, html:str):
     today = datetime.datetime.now().strftime('%Y/%m/%d')
     msg['Subject'] = Header(f'Daily arXiv {today}', 'utf-8').encode()
 
+    if smtp_port == 465:
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
+        server.login(sender, password)
+        server.sendmail(sender, [receiver], msg.as_string())
+        server.quit()
+        return
+
     try:
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()

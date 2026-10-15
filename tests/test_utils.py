@@ -121,6 +121,28 @@ class TestGlobMatch:
 # ---------------------------------------------------------------------------
 
 
+def test_send_email_465_connects_with_ssl_before_smtp_greeting(config, monkeypatch):
+    sent = []
+    connections = []
+    config.email.smtp_port = 465
+    StubOK = make_stub_smtp(sent)
+
+    class StubSSL(StubOK):
+        def __init__(self, host, port, *, timeout):
+            connections.append((host, port, timeout))
+
+    def reject_plain_connection(*args, **kwargs):
+        raise AssertionError("Port 465 must begin with an SSL handshake")
+
+    monkeypatch.setattr(smtplib, "SMTP", reject_plain_connection)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", StubSSL)
+    send_email(config, "<html>ssl-only</html>")
+
+    assert connections == [(config.email.smtp_server, 465, 30)]
+    assert len(sent) == 1
+    assert sent[0][:2] == ("test@example.com", ["test@example.com"])
+
+
 def test_send_email_starttls_success(config, monkeypatch):
     sent = []
     monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
