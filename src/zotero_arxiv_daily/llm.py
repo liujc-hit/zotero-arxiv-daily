@@ -6,11 +6,11 @@ from typing import Final, Literal, Protocol, assert_never
 
 from omegaconf import DictConfig, OmegaConf
 
-type LlmValue = (
-    str | int | float | bool | None | list["LlmValue"] | dict[str, "LlmValue"]
-)
+from .llm_schemas import BILINGUAL_PAPER_DIGEST_JSON_SCHEMA
+from .llm_schemas import LlmValue as LlmValue
+
 type ApiMode = Literal["chat_completion", "response"]
-type StructuredOutput = Literal["paper_digest"]
+type StructuredOutput = Literal["paper_digest", "bilingual_paper_digest"]
 type SdkArgument = LlmValue | list[dict[str, str]]
 
 
@@ -145,11 +145,20 @@ def _resolve_generation_kwargs(
     return generation_kwargs
 
 
-def _strict_paper_digest_config() -> dict[str, LlmValue]:
+def _strict_paper_digest_config(
+    name: StructuredOutput = "paper_digest",
+) -> dict[str, LlmValue]:
+    match name:
+        case "paper_digest":
+            schema = PAPER_DIGEST_JSON_SCHEMA
+        case "bilingual_paper_digest":
+            schema = BILINGUAL_PAPER_DIGEST_JSON_SCHEMA
+        case unreachable:
+            assert_never(unreachable)
     return {
-        "name": "paper_digest",
+        "name": name,
         "strict": True,
-        "schema": deepcopy(PAPER_DIGEST_JSON_SCHEMA),
+        "schema": deepcopy(schema),
     }
 
 
@@ -177,7 +186,7 @@ def _request_llm(
     uses_minimax_m3_chat_tool = (
         api_mode == "chat_completion"
         and model == "MiniMax-M3"
-        and structured_output == "paper_digest"
+        and structured_output is not None
     )
 
     match api_mode:
@@ -198,23 +207,23 @@ def _request_llm(
             match structured_output:
                 case None:
                     pass
-                case "paper_digest":
+                case "paper_digest" | "bilingual_paper_digest":
                     if uses_minimax_m3_chat_tool:
                         _ = generation_kwargs.pop("response_format", None)
                         _ = generation_kwargs.pop("tool_choice", None)
                         paper_digest_tool: dict[str, LlmValue] = {
                             "type": "function",
                             "function": {
-                                "name": "paper_digest",
+                                "name": structured_output,
                                 "description": "Return the requested paper digest.",
-                                "parameters": deepcopy(PAPER_DIGEST_JSON_SCHEMA),
+                                "parameters": _strict_paper_digest_config(structured_output)["schema"],
                             },
                         }
                         generation_kwargs["tools"] = [paper_digest_tool]
                     else:
                         generation_kwargs["response_format"] = {
                             "type": "json_schema",
-                            "json_schema": _strict_paper_digest_config(),
+                            "json_schema": _strict_paper_digest_config(structured_output),
                         }
                 case unreachable:
                     assert_never(unreachable)
@@ -226,7 +235,7 @@ def _request_llm(
             message = chat_response.choices[0].message
             if uses_minimax_m3_chat_tool:
                 for tool_call in message.tool_calls or ():
-                    if tool_call.function.name == "paper_digest":
+                    if tool_call.function.name == structured_output:
                         return tool_call.function.arguments
                 return ""
             return message.content or ""
@@ -243,7 +252,7 @@ def _request_llm(
             match structured_output:
                 case None:
                     pass
-                case "paper_digest":
+                case "paper_digest" | "bilingual_paper_digest":
                     text_options = generation_kwargs.get("text", {})
                     if text_options is None:
                         text_options = {}
@@ -253,7 +262,7 @@ def _request_llm(
                         **text_options,
                         "format": {
                             "type": "json_schema",
-                            **_strict_paper_digest_config(),
+                            **_strict_paper_digest_config(structured_output),
                         },
                     }
                 case unreachable:
