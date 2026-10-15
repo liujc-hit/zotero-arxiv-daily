@@ -58,6 +58,10 @@ enrichment:
     doi_prefixes: ["10.1007","10.1038","10.1057","10.1186"]
 
 email:
+  bilingual:
+    enabled: true # English/Chinese title, abstract and TL;DR for final selected papers only; false keeps the legacy llm.language digest.
+  figures:
+    enabled: true # Best-effort first research figure for final selected papers only; independent of bilingual. Raw image budget: 8 MiB per email.
   sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
   receiver: ??? # The email account that receives the paper list. Example: abc@outlook.com
   smtp_server: ??? # The SMTP server that sends the email. Ask your email provider (Gmail, QQ, Outlook, ...) for its SMTP server. Example: smtp.qq.com
@@ -103,7 +107,7 @@ executor:
   min_score: null # Minimum reranker score (0-10 scale) for a paper to appear in the email. Papers scoring below the floor are dropped; pinned papers bypass it. null disables the floor. Raise for precision, lower for recall. Example: 5.0
   pin_keywords: null # List of keywords to force-pin to the TOP of the email, on top of the recommendation algorithm. A paper whose title OR abstract contains any keyword (case-insensitive) is pinned. Pinned papers do NOT count against max_paper_num. Example: ["Mamba","state space model"]
   max_pinned_num: 20 # Upper bound on pinned papers per email. Matches beyond this cap fall back to the normal recommendation pool. Example: 20
-  enrich_workers: 8 # Number of parallel workers for fetching full text + generating TL;DR/affiliations for the final top-N papers. Raise for faster enrichment, lower if your LLM/embedding provider rate-limits you.
+  enrich_workers: 8 # Requested parallel workers for final pinned + top-N enrichment; effective count is capped at 4 and the selected paper count. Lower if your provider rate-limits you.
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv','openalex','pubmed']
   reranker: local # The reranker to use. Example: 'local' or 'api'
 

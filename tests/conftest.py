@@ -33,6 +33,8 @@ def _base_config():
                 "email.smtp_server=localhost",
                 "email.smtp_port=1025",
                 "email.sender_password=test",
+                "email.bilingual.enabled=false",
+                "email.figures.enabled=false",
                 "llm.api.key=sk-fake",
                 "llm.api.base_url=http://localhost:30000/v1",
                 "llm.generation_kwargs.model=gpt-4o-mini",
