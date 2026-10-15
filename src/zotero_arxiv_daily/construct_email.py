@@ -1,5 +1,18 @@
 from .protocol import Paper
+from .email_presentation import (
+    PIN_BADGE as _PIN_BADGE,
+    admit_figure_cids,
+    esc,
+    figure_html_for,
+    format_authors,
+    plain_text_digest,
+    render_presentation_block,
+    safe_url,
+)
+from .paper_presentation import InlineImage, RenderedEmail
 import math
+
+__all__ = ("render_email", "render_email_bundle", "get_stars", "get_block_html", "get_empty_html")
 
 
 framework = """
@@ -40,7 +53,6 @@ To unsubscribe, remove your email in your Github Action setting.
 </html>
 """
 
-_PIN_BADGE = '<span style="display:inline-block;font-size:12px;font-weight:600;color:#b8860b;background:#fff8e1;border:1px solid #ffe082;border-radius:4px;padding:2px 8px;margin-right:8px;vertical-align:middle;">&#128204; Pinned</span>'
 _SECTION_HEADER = '<div style="font-size:16px;font-weight:bold;color:#444;margin:12px 0 6px 0;padding-bottom:4px;border-bottom:2px solid #eee;">{text}</div>'
 
 def get_empty_html():
@@ -63,8 +75,21 @@ def get_block_html(
     pdf_url: str,
     affiliations: str | None = None,
     pinned: bool = False,
+    figure_html: str = "",
 ) -> str:
     badge = _PIN_BADGE if pinned else ''
+    figure_row = f'<tr><td style="padding: 8px 0;">{figure_html}</td></tr>' if figure_html else ''
+    pdf_href = safe_url(pdf_url)
+    pdf_row = (
+        """
+    <tr>
+        <td style="padding: 8px 0;">
+            <a href="{href}" style="display: inline-block; text-decoration: none; font-size: 14px; font-weight: bold; color: #fff; background-color: #d9534f; padding: 8px 16px; border-radius: 4px;">PDF</a>
+        </td>
+    </tr>""".format(href=esc(pdf_href))
+        if pdf_href is not None
+        else ''
+    )
     block_template = """
     <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif; border: 1px solid #ddd; border-radius: 8px; padding: 16px; background-color: #f9f9f9;">
     <tr>
@@ -89,15 +114,11 @@ def get_block_html(
             <strong>TLDR:</strong> {tldr}
         </td>
     </tr>
-
-    <tr>
-        <td style="padding: 8px 0;">
-            <a href="{pdf_url}" style="display: inline-block; text-decoration: none; font-size: 14px; font-weight: bold; color: #fff; background-color: #d9534f; padding: 8px 16px; border-radius: 4px;">PDF</a>
-        </td>
-    </tr>
+    {figure_row}
+    {pdf_row}
 </table>
-"""
-    return block_template.format(badge=badge, title=title, authors=authors,rate=rate, tldr=tldr, pdf_url=pdf_url, affiliations=affiliations)
+    """
+    return block_template.format(badge=badge, title=esc(title), authors=esc(authors),rate=esc(rate), tldr=esc(tldr), affiliations=esc(affiliations), figure_row=figure_row, pdf_row=pdf_row)
 
 def get_stars(score:float):
     full_star = '<span class="full-star">⭐</span>'
@@ -116,14 +137,9 @@ def get_stars(score:float):
         return '<div class="star-wrapper">'+full_star * full_star_num + half_star * half_star_num + '</div>'
 
 
-def _render_paper_block(p:Paper, pinned:bool=False) -> str:
+def _render_paper_block(p:Paper, pinned:bool=False, cid:str|None=None) -> str:
     rate = round(p.score, 1) if p.score is not None else 'Unknown'
-    author_list = [a for a in p.authors]
-    num_authors = len(author_list)
-    if num_authors <= 5:
-        authors = ', '.join(author_list)
-    else:
-        authors = ', '.join(author_list[:3] + ['...'] + author_list[-2:])
+    authors = format_authors(list(p.authors))
     if p.affiliations is not None:
         affiliations = p.affiliations[:5]
         affiliations = ', '.join(affiliations)
@@ -131,26 +147,55 @@ def _render_paper_block(p:Paper, pinned:bool=False) -> str:
             affiliations += ', ...'
     else:
         affiliations = 'Unknown Affiliation'
-    return get_block_html(p.title, authors, rate, p.tldr, p.pdf_url or p.url, affiliations, pinned=pinned)
+    if p.presentation is None or not p.presentation.bilingual_enabled:
+        return get_block_html(p.title, authors, rate, p.tldr, p.pdf_url or p.url, affiliations,
+                              pinned=pinned, figure_html=figure_html_for(p.presentation, cid))
+    return render_presentation_block(
+        p, p.presentation,
+        authors=authors, affiliations=affiliations, rate=rate, pinned=pinned, cid=cid,
+    )
 
 
-def render_email(papers:list[Paper]) -> str:
-    if len(papers) == 0 :
-        return framework.replace('__CONTENT__', get_empty_html())
+def render_email_bundle(papers:list[Paper], *, include_figures: bool = True) -> RenderedEmail:
+    """Render the full digest: bilingual HTML, admitted inline figures and a plain-text mirror.
+
+    With include_figures=False the standalone HTML contract applies: figure rows
+    are never emitted, so the mail body carries no cid references at all.
+    """
+    if len(papers) == 0:
+        return RenderedEmail(
+            framework.replace('__CONTENT__', get_empty_html()),
+            plain_text='No Papers Today. Take a Rest!',
+        )
+
+    figure_cids = admit_figure_cids(papers) if include_figures else {}
 
     # Keyword-pinned papers are expected to come first in `papers` (the executor
     # prepends them). Render them under a distinct header so they're clearly
     # separated from the algorithm's recommendations.
-    pinned = [p for p in papers if getattr(p, "pinned", False)]
-    others = [p for p in papers if not getattr(p, "pinned", False)]
+    pinned = [(i, p) for i, p in enumerate(papers) if getattr(p, "pinned", False)]
+    others = [(i, p) for i, p in enumerate(papers) if not getattr(p, "pinned", False)]
 
     parts = []
     if pinned:
         parts.append(_SECTION_HEADER.format(text="&#128204; Pinned by keywords"))
-        parts.extend(_render_paper_block(p, pinned=True) for p in pinned)
+        parts.extend(_render_paper_block(p, pinned=True, cid=figure_cids.get(i)) for i, p in pinned)
         if others:
             parts.append(_SECTION_HEADER.format(text="Recommended for you"))
-    parts.extend(_render_paper_block(p, pinned=False) for p in others)
+    parts.extend(_render_paper_block(p, pinned=False, cid=figure_cids.get(i)) for i, p in others)
 
     content = '<br>' + '</br><br>'.join(parts) + '</br>'
-    return framework.replace('__CONTENT__', content)
+    html = framework.replace('__CONTENT__', content)
+    inline_images = []
+    for index, cid in figure_cids.items():
+        presentation = papers[index].presentation
+        figure = presentation.first_figure if presentation is not None else None
+        if figure is None:
+            continue
+        inline_images.append(InlineImage(cid, figure.data, figure.media_type))
+    return RenderedEmail(html, tuple(inline_images), plain_text_digest(papers, figure_cids))
+
+
+def render_email(papers:list[Paper]) -> str:
+    """Standalone HTML: figures omitted, so the body never references a cid part."""
+    return render_email_bundle(papers, include_figures=False).html
