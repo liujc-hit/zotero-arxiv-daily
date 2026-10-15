@@ -38,7 +38,9 @@ def first_image(data: bytes, article: str) -> tuple[str, str] | None:
     """Require exactly one Figure 1 container with exactly one raster image."""
     if not data or len(data) > LIMIT:
         return None
-    root = html.fromstring(data, parser=html.HTMLParser(no_network=True, recover=True))
+    root = html.fromstring(data, parser=html.HTMLParser(
+        no_network=True, recover=True, remove_comments=True, remove_pis=True,
+    ))
     candidates: list[FigureImage] = []
     for node in root.iter():
         classes = set(node.get("class", "").split())
