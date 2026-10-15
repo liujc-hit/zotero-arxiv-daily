@@ -11,13 +11,15 @@ from .retriever.openalex_errors import MissingOpenAlexCredentialsError
 from .protocol import CorpusPaper, Paper
 from .enrichment.pipeline import build_pipeline_enrichers
 from .final_enrichment import enrich_final_papers
+from .presentation_config import PresentationOptions
 from .paper_identity import filter_sent_paper_candidates, paper_identities
 from .retrieval import retrieve_and_merge
 from .sent_doi_state import build_sent_doi_state_store
 import random
 from datetime import datetime
+from functools import cached_property
 from .reranker import get_reranker_cls
-from .construct_email import render_email
+from .construct_email import render_email, render_email_bundle
 from .utils import send_email
 from openai import OpenAI
 
@@ -82,7 +84,13 @@ class Executor:
             api_key=config.llm.api.key,
             base_url=config.llm.api.base_url,
             max_retries=0,
+            timeout=45.0,
         )
+
+    @cached_property
+    def presentation_options(self) -> PresentationOptions:
+        return PresentationOptions.from_config(self.config)
+
     def fetch_zotero_corpus(self) -> list[CorpusPaper]:
         logger.info("Fetching zotero corpus")
         zot = zotero.Zotero(self.config.zotero.user_id, 'user', self.config.zotero.api_key)
@@ -176,8 +184,18 @@ class Executor:
             return
         self._enrich_papers(email_papers)
         logger.info("Sending email...")
-        email_content = render_email(email_papers)
-        send_email(self.config, email_content)
+        options = self.presentation_options
+        if options.bilingual or options.figures:
+            bundle = render_email_bundle(email_papers)
+            if bundle.inline_images or bundle.plain_text.strip():
+                send_email(
+                    self.config, bundle.html,
+                    inline_images=bundle.inline_images, plain_text=bundle.plain_text,
+                )
+            else:
+                send_email(self.config, bundle.html)
+        else:
+            send_email(self.config, render_email(email_papers))
         emailed_identities = paper_identities(email_papers)
         if emailed_identities:
             self.sent_doi_state_store.save(sent_identities | emailed_identities)
@@ -295,15 +313,23 @@ class Executor:
             workers = max(1, int(workers_config))
         except (TypeError, ValueError):
             workers = 8
-        worker_count = min(workers, len(papers))
+        worker_count = min(workers, 4, len(papers))
         logger.info(
             f"Fetching full text + generating TL;DR/affiliations for "
             f"{len(papers)} papers ({worker_count} workers)..."
         )
+        options = self.presentation_options
+        if not options.bilingual and not options.figures:
+            _ = enrich_final_papers(
+                papers, self.retrievers, self.openai_client, self.config.llm, workers,
+            )
+            return
         _ = enrich_final_papers(
             papers,
             self.retrievers,
             self.openai_client,
             self.config.llm,
             workers,
+            bilingual=options.bilingual,
+            figures=options.figures,
         )

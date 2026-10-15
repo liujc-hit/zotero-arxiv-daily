@@ -225,7 +225,7 @@ def test_init_preserves_source_order_builds_pipeline_then_disables_sdk_retries(
     # Given: configured sources, recording factories, and a pipeline builder.
     constructed: list[str] = []
     pipeline_inputs: list[tuple[str, ...]] = []
-    openai_arguments: list[dict[str, str | int]] = []
+    openai_arguments: list[dict[str, str | int | float]] = []
     pipeline = PipelineEnrichers()
 
     def retriever_class(source: str):
@@ -268,6 +268,7 @@ def test_init_preserves_source_order_builds_pipeline_then_disables_sdk_retries(
         "api_key": "test-key",
         "base_url": "https://llm.example/v1",
         "max_retries": 0,
+        "timeout": 45.0,
     }]
 
 
