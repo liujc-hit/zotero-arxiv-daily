@@ -3,12 +3,9 @@ import re
 import glob
 import math
 import smtplib
+import contextlib
 from collections import Counter
-from email.header import Header
-from email.mime.text import MIMEText
-from email.utils import parseaddr, formataddr
 from loguru import logger
-import datetime
 from omegaconf import DictConfig
 import pymupdf
 import pymupdf.layout
@@ -16,6 +13,9 @@ pymupdf.TOOLS.mupdf_display_errors(False)
 pymupdf.layout.activate()
 
 import pymupdf4llm  # noqa: E402
+
+from .email_message import build_digest_message
+from .paper_presentation import InlineImage
 
 _TOKEN_RE = re.compile(r'[a-zA-Z0-9]+')
 
@@ -140,40 +140,53 @@ def glob_match(path:str, pattern:str) -> bool:
     re_pattern = glob.translate(pattern,recursive=True)
     return re.match(re_pattern, path) is not None
 
-def send_email(config:DictConfig, html:str):
+def _quit_quietly(server) -> None:
+    """Best-effort SMTP teardown that never masks an in-flight exception."""
+    if server is None:
+        return
+    with contextlib.suppress(Exception):
+        server.quit()
+
+
+def send_email(
+    config: DictConfig,
+    html: str,
+    *,
+    inline_images: tuple[InlineImage, ...] = (),
+    plain_text: str = "",
+) -> None:
+    """Send the digest; images ride along as inline MIME parts when provided."""
+    msg = build_digest_message(config, html, inline_images, plain_text)
+    body = msg.as_string()
     sender = config.email.sender
     receiver = config.email.receiver
     password = config.email.sender_password
     smtp_server = config.email.smtp_server
     smtp_port = config.email.smtp_port
-    def _format_addr(s):
-        name, addr = parseaddr(s)
-        return formataddr((Header(name, 'utf-8').encode(), addr))
-
-    msg = MIMEText(html, 'html', 'utf-8')
-    msg['From'] = _format_addr('Github Action <%s>' % sender)
-    msg['To'] = _format_addr('You <%s>' % receiver)
-    today = datetime.datetime.now().strftime('%Y/%m/%d')
-    msg['Subject'] = Header(f'Daily arXiv {today}', 'utf-8').encode()
 
     if smtp_port == 465:
         server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
-        server.login(sender, password)
-        server.sendmail(sender, [receiver], msg.as_string())
-        server.quit()
+        try:
+            server.login(sender, password)
+            server.sendmail(sender, [receiver], body)
+        finally:
+            _quit_quietly(server)
         return
 
+    server = None
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-    except Exception as e:
-        logger.debug(f"Failed to use TLS. {e}\nTry to use SSL.")
         try:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
-        except Exception as e:
-            logger.debug(f"Failed to use SSL. {e}\nTry to use plain text.")
             server = smtplib.SMTP(smtp_server, smtp_port)
-
-    server.login(sender, password)
-    server.sendmail(sender, [receiver], msg.as_string())
-    server.quit()
+            server.starttls()
+        except Exception as e:
+            logger.debug(f"Failed to use TLS. {e}\nTry to use SSL.")
+            _quit_quietly(server)
+            try:
+                server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+            except Exception as e:
+                logger.debug(f"Failed to use SSL. {e}\nTry to use plain text.")
+                server = smtplib.SMTP(smtp_server, smtp_port)
+        server.login(sender, password)
+        server.sendmail(sender, [receiver], body)
+    finally:
+        _quit_quietly(server)
