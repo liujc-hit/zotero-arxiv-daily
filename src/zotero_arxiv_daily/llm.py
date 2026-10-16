@@ -212,7 +212,6 @@ def _request_llm(
                 case "paper_digest" | "bilingual_paper_digest":
                     if uses_minimax_m3_chat_tool:
                         _ = generation_kwargs.pop("response_format", None)
-                        _ = generation_kwargs.pop("tool_choice", None)
                         paper_digest_tool: dict[str, LlmValue] = {
                             "type": "function",
                             "function": {

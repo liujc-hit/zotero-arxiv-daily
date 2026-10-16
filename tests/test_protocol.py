@@ -262,7 +262,7 @@ def test_minimax_m3_chat_digest_uses_one_function_tool_and_preserves_options() -
         "thinking": {"budget_tokens": 128, "type": "disabled"},
     }
     assert "response_format" not in request
-    assert "tool_choice" not in request
+    assert request["tool_choice"] == generation_kwargs["tool_choice"]
     tools = request["tools"]
     assert isinstance(tools, list)
     assert len(tools) == 1
