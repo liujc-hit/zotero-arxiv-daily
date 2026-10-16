@@ -106,7 +106,7 @@ def test_elsevier_uses_encoded_doi_header_and_stops_after_zero_remaining(
         "https://api.elsevier.com/content/abstract/doi/"
         f"{quote(PRIVATE_DOI, safe='')}"
     )
-    assert calls[0].params == {}
+    assert calls[0].params == {"view": "META_ABS"}
     assert calls[0].headers == {
         "Accept": "application/json",
         "X-ELS-APIKey": SECRET,

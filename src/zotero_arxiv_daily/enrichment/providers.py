@@ -82,7 +82,7 @@ class ElsevierAdapter:
                 ProviderRequest(
                     provider=ProviderName.ELSEVIER,
                     url=f"{_ELSEVIER_ENDPOINT}/{quote(doi, safe='')}",
-                    params={},
+                    params={"view": "META_ABS"},
                     headers={
                         "Accept": "application/json",
                         "X-ELS-APIKey": (self._settings.api_key or "").strip(),
