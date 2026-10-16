@@ -8,6 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from .llm_schemas import BILINGUAL_PAPER_DIGEST_JSON_SCHEMA
 from .llm_schemas import LlmValue as LlmValue
+from .llm_diagnostics import RequestDiagnostics
 
 type ApiMode = Literal["chat_completion", "response"]
 type StructuredOutput = Literal["paper_digest", "bilingual_paper_digest"]
@@ -168,6 +169,7 @@ def _request_llm(
     messages: list[dict[str, str]],
     *,
     structured_output: StructuredOutput | None = None,
+    diagnostics: RequestDiagnostics | None = None,
 ) -> str:
     """Issue one SDK request without mutating the supplied LLM configuration."""
     api_mode_value = llm_params.get("api_mode", "chat_completion")
@@ -232,11 +234,16 @@ def _request_llm(
                 messages=messages,
                 **generation_kwargs,
             )
-            message = chat_response.choices[0].message
+            choice = chat_response.choices[0]
+            message = choice.message
+            if diagnostics is not None:
+                diagnostics.capture(lambda: getattr(choice, "finish_reason", None), chat=True)
             if uses_minimax_m3_chat_tool:
                 for tool_call in message.tool_calls or ():
                     if tool_call.function.name == structured_output:
                         return tool_call.function.arguments
+                if diagnostics is not None:
+                    diagnostics.missing_tool = True
                 return ""
             return message.content or ""
 
@@ -272,6 +279,8 @@ def _request_llm(
                 input=messages,
                 **generation_kwargs,
             )
+            if diagnostics is not None:
+                diagnostics.capture(lambda: getattr(getattr(api_response, "incomplete_details", None), "reason", None), chat=False)
             return api_response.output_text
 
         case unreachable:
