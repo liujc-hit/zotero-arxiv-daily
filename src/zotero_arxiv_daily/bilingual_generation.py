@@ -9,6 +9,7 @@ from openai import OpenAIError
 import tiktoken
 
 from .llm import LlmClient, LlmValue, _request_llm
+from .llm_diagnostics import RequestDiagnostics, summarize_fallback
 from .llm_schemas import (
     BilingualPaperDigest, MAX_ABSTRACT_CHARS, MAX_RESPONSE_CHARS, MAX_TITLE_CHARS,
 )
@@ -71,10 +72,12 @@ def generate_bilingual_digest(
         paper.tldr = NO_CONTENT_TLDR
         paper.affiliations = None
         return PaperPresentation()
+    diagnostics = RequestDiagnostics()
     try:
         response = _request_llm(
             client, llm_params, _build_messages(paper),
             structured_output="bilingual_paper_digest",
+            diagnostics=diagnostics,
         )
         if len(response) > MAX_RESPONSE_CHARS:
             raise InvalidBilingualDigestError("response_length")
@@ -84,8 +87,15 @@ def generate_bilingual_digest(
         if not paper.abstract.strip() and (digest.abstract_en or digest.abstract_zh):
             raise InvalidBilingualDigestError("invented_abstract")
     except (OpenAIError, TimeoutError, ValueError, RuntimeError, TypeError, IndexError) as error:
-        logger.bind(exception_type=type(error).__name__).warning(
-            "bilingual_paper_digest fallback category=request_or_schema"
+        local_reason = (
+            error.args[0] if isinstance(error, InvalidBilingualDigestError)
+            and error.args and isinstance(error.args[0], str) else None
+        )
+        detail = summarize_fallback(error, diagnostics, local_reason)
+        logger.warning(
+            "bilingual_paper_digest fallback category=request_or_schema reason={} exception_type={} finish_reason={} http_status={}{}",
+            detail.reason, detail.exception_type, detail.finish_reason,
+            detail.http_status, detail.validation_suffix,
         )
         paper.tldr = paper.abstract if paper.abstract.strip() else GENERATION_FAILED_TLDR
         paper.affiliations = None
