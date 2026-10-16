@@ -74,12 +74,12 @@ def test_bilingual_schema_when_requesting_digest(mode: ApiMode, model: str, thin
             assert request["extra_body"] == {"custom": True, "thinking": {"custom": True, "type": "disabled"}}
 
 
-def test_empty_when_minimax_returns_wrong_tool():
+def test_entire_content_when_minimax_returns_wrong_tool():
     # Given
     client, calls = make_recording_client("not a digest", tool_calls=(("paper_digest", "wrong"),))
     params: dict[str, LlmValue] = {"generation_kwargs": {"model": "MiniMax-M3"}}
     # When
     result = _request_llm(client, params, [], structured_output="bilingual_paper_digest")
     # Then
-    assert result == ""
+    assert result == "not a digest"
     assert len(calls) == 1

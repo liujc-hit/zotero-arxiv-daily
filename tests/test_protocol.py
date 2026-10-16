@@ -316,7 +316,7 @@ def test_minimax_m3_chat_digest_returns_first_matching_tool_arguments_unchanged(
         ),
     ],
 )
-def test_minimax_m3_chat_digest_returns_empty_without_matching_tool_call(
+def test_minimax_m3_chat_digest_returns_entire_content_without_matching_tool_call(
     tool_calls: tuple[tuple[str, str], ...],
 ) -> None:
     # Given
@@ -338,7 +338,7 @@ def test_minimax_m3_chat_digest_returns_empty_without_matching_tool_call(
     )
 
     # Then
-    assert result == ""
+    assert result == '{"tldr":"Content fallback.","affiliations":[]}'
     assert len(recorded_requests) == 1
 
 

@@ -90,7 +90,7 @@ def test_minimax_m3_tool_digest_sets_both_fields_after_exactly_one_call() -> Non
     assert len(calls) == 1
 
 
-def test_minimax_m3_missing_digest_tool_falls_back_once_with_redacted_log(
+def test_minimax_m3_missing_tool_and_invalid_body_fall_back_once_with_redacted_log(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
@@ -107,7 +107,7 @@ def test_minimax_m3_missing_digest_tool_falls_back_once_with_redacted_log(
         record_warning,
     )
     client, calls = make_recording_client(
-        content=json.dumps(
+        content="response-content-secret " + json.dumps(
             {"tldr": "response-content-secret", "affiliations": []}
         ),
         tool_calls=(("other_tool", "tool-arguments-secret"),),

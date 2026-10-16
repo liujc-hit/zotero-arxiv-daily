@@ -101,15 +101,15 @@ def test_safe_warning_when_payload_fails(logs: list[Message], body: str, reason:
     assert result == PaperPresentation() and len(calls) == 1
 
 
-def test_missing_tool_when_valid_content_is_ignored(logs: list[Message]) -> None:
+def test_no_warning_when_valid_content_replaces_missing_tool(logs: list[Message]) -> None:
     # Given
     client, calls = make_recording_client(json.dumps(payload()))
     params: dict[str, LlmValue] = {"generation_kwargs": {"model": "MiniMax-M3"}}
     # When
     result = generate_bilingual_digest(paper(), client, params)
     # Then
-    assert fields(logs)["reason"] == "missing_tool"
-    assert result == PaperPresentation() and len(calls) == 1
+    assert logs == []
+    assert result.title.en == "Generated title" and len(calls) == 1
 
 
 def test_bounds_when_source_is_too_long(logs: list[Message]) -> None:

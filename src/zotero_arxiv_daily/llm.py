@@ -241,9 +241,10 @@ def _request_llm(
                 for tool_call in message.tool_calls or ():
                     if tool_call.function.name == structured_output:
                         return tool_call.function.arguments
+                content = message.content or ""
                 if diagnostics is not None:
-                    diagnostics.missing_tool = True
-                return ""
+                    diagnostics.missing_tool = not content.strip()
+                return content
             return message.content or ""
 
         case "response":
