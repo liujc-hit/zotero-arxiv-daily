@@ -28,18 +28,16 @@ def _build_messages(paper: DigestPaper) -> list[dict[str, str]]:
     if len(paper.title) > MAX_TITLE_CHARS or len(paper.abstract) > MAX_ABSTRACT_CHARS:
         raise InvalidBilingualDigestError("source_length")
     system = (
-        "Return English and Chinese title, complete abstract translations, and one-sentence "
-        "TLDRs. Copy the source title/abstract verbatim into its original language field "
-        "when it is English or Chinese. Never summarize or truncate the abstract. "
+        "Return English and Chinese titles and one-sentence TLDRs. Copy the source title "
+        "verbatim into its original language field when it is English or Chinese. "
+        "Use the source abstract only as reading context for the TLDRs; do not translate "
+        "or return abstracts. "
         "Both tool arguments and ordinary content must use the same exact object with all "
-        "seven required top-level keys and types: title_en (string, English title); "
-        "title_zh (string, Chinese title); abstract_en (string, full English abstract); "
-        "abstract_zh (string, full Chinese abstract); tldr_en (string, English one-sentence "
+        "five required top-level keys and types: title_en (string, English title); "
+        "title_zh (string, Chinese title); tldr_en (string, English one-sentence "
         "TLDR); tldr_zh (string, Chinese one-sentence TLDR); affiliations (array of strings "
         "containing institution proper names). Do not omit, rename or add keys or use a "
         "wrapper object. Title and TLDR strings must be nonempty after trimming. "
-        "Return empty strings for both abstract fields only when the source abstract is "
-        "empty; otherwise both must contain the complete abstracts. "
         "Preserve authors, proper names, technical terms and institution names; return "
         "top-level affiliations in author order without translating institution proper "
         "names or inventing affiliations. Each affiliation item must be trimmed and "
@@ -97,10 +95,6 @@ def generate_bilingual_digest(
         if len(response) > MAX_RESPONSE_CHARS:
             raise InvalidBilingualDigestError("response_length")
         digest = BilingualPaperDigest.model_validate_json(response)
-        if paper.abstract.strip() and not (digest.abstract_en and digest.abstract_zh):
-            raise InvalidBilingualDigestError("incomplete_abstract")
-        if not paper.abstract.strip() and (digest.abstract_en or digest.abstract_zh):
-            raise InvalidBilingualDigestError("invented_abstract")
     except (OpenAIError, TimeoutError, ValueError, RuntimeError, TypeError, IndexError) as error:
         local_reason = (
             error.args[0] if isinstance(error, InvalidBilingualDigestError)
@@ -112,13 +106,12 @@ def generate_bilingual_digest(
             detail.reason, detail.exception_type, detail.finish_reason,
             detail.http_status, detail.validation_suffix,
         )
-        paper.tldr = paper.abstract if paper.abstract.strip() else GENERATION_FAILED_TLDR
+        paper.tldr = GENERATION_FAILED_TLDR
         paper.affiliations = None
         return PaperPresentation()
 
     presentation = PaperPresentation(
         title=_preserve_source(paper.title, BilingualText(digest.title_en, digest.title_zh)),
-        abstract=_preserve_source(paper.abstract, BilingualText(digest.abstract_en, digest.abstract_zh)),
         tldr=BilingualText(digest.tldr_en, digest.tldr_zh),
     )
     language = str(llm_params.get("language", "English")).strip().casefold()

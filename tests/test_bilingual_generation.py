@@ -19,7 +19,6 @@ from zotero_arxiv_daily.protocol import Paper
 def payload() -> dict[str, str | list[str]]:
     return {
         "title_en": "Generated title", "title_zh": "中文标题",
-        "abstract_en": "Generated abstract", "abstract_zh": "中文摘要",
         "tldr_en": "English summary", "tldr_zh": "中文总结",
         "affiliations": ["Example University", "Example University"],
     }
@@ -36,7 +35,6 @@ def test_complete_digest_when_request_succeeds(mode: ApiMode, language: str):
     # Then
     assert result == PaperPresentation(
         title=BilingualText("Generated title", "中文标题"),
-        abstract=BilingualText("Generated abstract", "中文摘要"),
         tldr=BilingualText("English summary", "中文总结"),
     )
     assert paper.tldr == ("English summary" if language == "English" else "中文总结")
@@ -55,17 +53,18 @@ def test_fallback_when_response_unusable(bad: str | None):
     result = generate(paper, client, llm_params("chat_completion", "Chinese"))
     # Then
     assert result == PaperPresentation()
-    assert paper.tldr == "  Original abstract  "
+    assert paper.tldr == GENERATION_FAILED_TLDR
+    assert paper.abstract == "  Original abstract  "
     assert paper.affiliations is None
     assert len(calls) == 1
 
 
 @pytest.mark.parametrize("field,value", [
     ("title_en", ""), ("title_zh", " "), ("tldr_en", 42),
-    ("tldr_zh", "x" * 2001), ("abstract_en", "x" * 24001),
-    ("abstract_zh", ""), ("affiliations", [42]), ("extra", "value"),
+    ("tldr_zh", "x" * 2001), ("title_en", "x" * 2049),
+    ("tldr_zh", ""), ("affiliations", [42]), ("extra", "value"),
     ("affiliations", [" "]), ("affiliations", ["a" * 257]),
-    ("affiliations", ["Institution"] * 101), ("abstract_en", True),
+    ("affiliations", ["Institution"] * 101), ("tldr_en", True),
 ])
 def test_fallback_when_schema_invalid(field: str, value: str | int | list[int]):
     # Given
@@ -76,7 +75,7 @@ def test_fallback_when_schema_invalid(field: str, value: str | int | list[int]):
     result = generate(paper, client, llm_params("response"))
     # Then
     assert result == PaperPresentation()
-    assert paper.tldr == "Abstract"
+    assert paper.tldr == GENERATION_FAILED_TLDR
     assert len(calls) == 1
 
 
@@ -106,15 +105,15 @@ def test_skip_when_no_content():
     assert calls == []
 
 
-def test_empty_abstract_when_only_fulltext_available():
+def test_title_and_tldr_when_only_fulltext_available():
     # Given
     paper = Paper("arxiv", "Title", [], "", "url", full_text="Paper body")
-    data = payload() | {"abstract_en": "", "abstract_zh": ""}
+    data = payload()
     client, calls = make_recording_client(json.dumps(data))
     # When
     result = generate(paper, client, llm_params("response"))
     # Then
-    assert result.abstract == BilingualText("", "")
+    assert result.abstract == BilingualText()
     assert paper.tldr == "English summary"
     assert len(calls) == 1
 
@@ -130,13 +129,13 @@ def test_keeps_provider_translations_when_source_differs(mode: ApiMode, example:
     # Given
     source, en, zh = example
     paper = Paper("arxiv", source, ["García", "Müller"], source, "url")
-    data = payload() | {"title_en": en, "title_zh": zh, "abstract_en": en, "abstract_zh": zh}
+    data = payload() | {"title_en": en, "title_zh": zh}
     client, calls = make_recording_client(json.dumps(data))
     # When
     result = generate(paper, client, llm_params(mode))
     # Then
     assert result.title == BilingualText(en, zh)
-    assert result.abstract == BilingualText(en, zh)
+    assert result.abstract == BilingualText()
     assert (paper.title, paper.abstract, paper.authors) == (source, source, ["García", "Müller"])
     assert len(calls) == 1
 
@@ -151,7 +150,6 @@ def test_preserves_source_formatting_when_provider_text_matches(mode: ApiMode, s
     paper = Paper("arxiv", source, [], source, "url")
     data = payload() | {
         "title_en": translations.en, "title_zh": translations.zh,
-        "abstract_en": translations.en, "abstract_zh": translations.zh,
     }
     client, calls = make_recording_client(json.dumps(data))
     expected = BilingualText(
@@ -162,12 +160,12 @@ def test_preserves_source_formatting_when_provider_text_matches(mode: ApiMode, s
     result = generate(paper, client, llm_params(mode))
     # Then
     assert result.title == expected
-    assert result.abstract == expected
+    assert result.abstract == BilingualText()
     assert (paper.title, paper.abstract) == (source, source)
     assert len(calls) == 1
 
 
-def test_fallback_when_source_exceeds_complete_translation_budget():
+def test_fallback_when_source_exceeds_input_budget():
     # Given
     paper = Paper("arxiv", "Title", [], "a" * 24001, "url")
     client, calls = make_recording_client(json.dumps(payload()))
@@ -175,7 +173,8 @@ def test_fallback_when_source_exceeds_complete_translation_budget():
     result = generate(paper, client, llm_params("response"))
     # Then
     assert result == PaperPresentation()
-    assert paper.tldr == paper.abstract
+    assert paper.tldr == GENERATION_FAILED_TLDR
+    assert paper.abstract == "a" * 24001
     assert calls == []
 
 
@@ -186,7 +185,8 @@ def test_complete_source_when_fulltext_exceeds_budget():
     # When
     result = generate(paper, client, llm_params("response"))
     # Then: inspect source data, not prompt prose.
-    assert result.abstract.en == "Generated abstract"
+    assert result.abstract == BilingualText()
+    assert result.title.en == "Generated title"
     messages = calls[0]["input"]
     assert isinstance(messages, list)
     message = messages[1]
@@ -212,7 +212,7 @@ def test_safe_fallback_when_api_connection_fails():
         logger.remove(sink)
     # Then
     assert result == PaperPresentation()
-    assert paper.tldr == "Abstract"
+    assert paper.tldr == GENERATION_FAILED_TLDR
     assert len(calls) == 1
     assert logs and all("secret-key" not in line for line in logs)
 
@@ -225,5 +225,5 @@ def test_fallback_when_response_exceeds_size_limit():
     result = generate(paper, client, llm_params("chat_completion"))
     # Then
     assert result == PaperPresentation()
-    assert paper.tldr == "Abstract"
+    assert paper.tldr == GENERATION_FAILED_TLDR
     assert len(calls) == 1

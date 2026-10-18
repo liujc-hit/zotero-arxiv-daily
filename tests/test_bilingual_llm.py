@@ -65,8 +65,11 @@ def test_bilingual_schema_when_requesting_digest(mode: ApiMode, model: str, thin
     required = schema["required"]
     assert isinstance(required, list)
     assert set(required) == {
-        "title_en", "title_zh", "abstract_en", "abstract_zh", "tldr_en", "tldr_zh", "affiliations",
+        "title_en", "title_zh", "tldr_en", "tldr_zh", "affiliations",
     }
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert set(properties) == set(required)
     if thinking == "disabled" and model == "MiniMax-M3":
         if mode == "response":
             assert request["reasoning"] == {"summary": "auto", "effort": "none"}
