@@ -35,7 +35,7 @@ def test_first_image_when_non_element_nodes_are_present(
     # When
     result = first_image(body, _ARTICLE)
     # Then
-    assert result == (_ARTICLE + "/f.png", _CAPTION)
+    assert result == ("https://arxiv.org/html/f.png", _CAPTION)
 
 
 @pytest.mark.parametrize("marker", _NODES, ids=["comment", "pi"])
@@ -60,7 +60,7 @@ def test_fetch_first_figure_when_http_html_contains_non_element_nodes(
     body = b"<html><body>" + marker + figure + marker + b"</body></html>"
     routes = {
         "/html/2501.01234v1": (200, {"Content-Type": "text/html"}, body),
-        "/html/2501.01234v1/f.png": (200, {"Content-Type": "image/png"}, data),
+        "/html/f.png": (200, {"Content-Type": "image/png"}, data),
     }
     paper = Paper("arxiv", "Title", [], "", "https://arxiv.org/abs/2501.01234v1")
     with local_server(routes) as port:
@@ -70,5 +70,5 @@ def test_fetch_first_figure_when_http_html_contains_non_element_nodes(
     # Then
     assert result is not None
     assert (result.data, result.media_type, result.caption, result.source_url) == (
-        data, "image/png", _CAPTION, _ARTICLE + "/f.png",
+        data, "image/png", _CAPTION, "https://arxiv.org/html/f.png",
     )

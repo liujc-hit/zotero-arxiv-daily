@@ -57,7 +57,7 @@ def test_fetch_first_figure_when_served_over_real_local_http(monkeypatch):
     article = b'<figure><img src="f.png"><figcaption>Figure 1: Composite</figcaption></figure>'
     routes = {
         "/html/2501.01234v1": (200, {"Content-Type": "text/html"}, article),
-        "/html/2501.01234v1/f.png": (200, {"Content-Type": "image/png"}, data),
+        "/html/f.png": (200, {"Content-Type": "image/png"}, data),
     }
     with local_server(routes) as port:
         bind_local(monkeypatch, port)

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from .figure_parser import PARSER_ERRORS, article_url, first_image
+from .figure_parser import PARSER_ERRORS, article_url, first_image, select_article_url
 from .figure_raster import verified_figure
 from .figure_transport import FigureFetchError, checked_url, fetch_resource, remaining
 from .paper_presentation import ResearchFigure
@@ -26,7 +26,7 @@ def fetch_first_figure(paper: Paper) -> ResearchFigure | None:
     bioRxiv/medRxiv HTML figures on the same source host. Missing, vector-only,
     separate-panel, unsupported, or ambiguous figures are omitted.
     """
-    article = article_url(paper.url)
+    article = select_article_url(paper.url, paper.pdf_url)
     if article is None:
         return None
     deadline = monotonic() + 15.0

@@ -43,7 +43,7 @@ def test_original_figure_when_logo_and_figure10_precede_it(monkeypatch):
     assert result is not None
     assert result.data == data
     assert result.caption == "Figure 1: Original caption."
-    assert result.source_url == "https://arxiv.org/html/2501.01234v2/x1.png"
+    assert result.source_url == "https://arxiv.org/html/x1.png"
     assert urls == ["https://arxiv.org/html/2501.01234v2", result.source_url]
 
 

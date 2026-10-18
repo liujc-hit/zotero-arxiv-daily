@@ -34,6 +34,32 @@ def article_url(url: str) -> str | None:
     return f"https://www.{host}/content/{found[1]}.full" if found else None
 
 
+def select_article_url(url: str, pdf_url: str | None) -> str | None:
+    """Reconcile allowlisted identities offline, declining conflicting sources.
+
+    For one arXiv ID, prefer an explicit revision over an unspecified revision;
+    different explicit revisions or different trusted article identities conflict.
+    Unsupported URLs are never fetched, including DOI resolver URLs.
+    """
+    primary = article_url(url)
+    secondary = article_url(pdf_url) if pdf_url is not None else None
+    if primary is None:
+        return secondary
+    if secondary is None or primary == secondary:
+        return primary
+    if not all(candidate.startswith("https://arxiv.org/html/") for candidate in (primary, secondary)):
+        return None
+    primary_core = re.sub(r"v[1-9]\d*$", "", primary)
+    secondary_core = re.sub(r"v[1-9]\d*$", "", secondary)
+    if primary_core != secondary_core:
+        return None
+    if primary == primary_core:
+        return secondary
+    if secondary == secondary_core:
+        return primary
+    return None
+
+
 def first_image(data: bytes, article: str) -> tuple[str, str] | None:
     """Require exactly one Figure 1 container with exactly one raster image."""
     if not data or len(data) > LIMIT:
@@ -66,8 +92,7 @@ def first_image(data: bytes, article: str) -> tuple[str, str] | None:
             if not parsed or any(len(choice) != 2 or not re.fullmatch(r"\d+(?:\.\d+)?[wx]", choice[1]) for choice in parsed):
                 return None
             source = parsed[0][0]
-        base = article + "/" if "/html/" in article else article
-        url = urljoin(base, source)
+        url = urljoin(article, source)
         try:
             parts = checked_url(url)
             parent = checked_url(article)
