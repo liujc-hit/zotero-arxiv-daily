@@ -12,7 +12,11 @@ import pytest
 
 from zotero_arxiv_daily import final_enrichment as enrichment
 from zotero_arxiv_daily.construct_email import render_email, render_email_bundle
-from zotero_arxiv_daily.email_presentation import TRANSLATION_NOTICE, safe_url
+from zotero_arxiv_daily.email_presentation import (
+    TLDR_UNAVAILABLE_NOTICE,
+    TRANSLATION_NOTICE,
+    safe_url,
+)
 from zotero_arxiv_daily.final_enrichment import enrich_final_papers
 from zotero_arxiv_daily.paper_presentation import (
     BilingualText,
@@ -155,6 +159,17 @@ def test_figures_only_plain_text_has_no_notices():
     assert "single language tldr" in bundle.plain_text
     for fragment in ("EN:", "中文:", TRANSLATION_NOTICE):
         assert fragment not in bundle.plain_text
+
+
+def test_figures_only_raw_abstract_fallback_shows_notice_not_abstract():
+    paper = make_figures_only_paper(with_figure=True)
+    paper.abstract = "Long raw abstract text that must never render as a TLDR."
+    paper.tldr = paper.abstract
+    bundle = render_email_bundle([paper])
+    assert paper.abstract not in bundle.html
+    assert paper.abstract not in bundle.plain_text
+    assert TLDR_UNAVAILABLE_NOTICE in bundle.html
+    assert "cid:figure-0" in bundle.html  # the figure survives the guard
 
 
 def test_figures_only_pinned_paper_keeps_badge_and_sections():
