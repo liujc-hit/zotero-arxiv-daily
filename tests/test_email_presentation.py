@@ -3,6 +3,7 @@
 import pytest
 
 from zotero_arxiv_daily.construct_email import render_email, render_email_bundle
+from zotero_arxiv_daily.email_presentation import TLDR_UNAVAILABLE_NOTICE
 from zotero_arxiv_daily.paper_presentation import (
     BilingualText,
     InlineImage,
@@ -102,11 +103,12 @@ def test_presentation_shows_original_title_then_labeled_en_and_zh():
     assert html.index("示例论文标题", zh_label) > zh_label
 
 
-def test_presentation_shows_abstract_with_bilingual_labels():
+def test_presentation_omits_abstract_rows_even_when_populated():
     html = render_email_bundle([make_presented_paper()]).html
-    assert "本文探索了一种新颖的组件工程方法。" in html
-    assert "Abstract" in html
-    assert "摘要" in html
+    assert "Abstract" not in html
+    assert "摘要" not in html
+    assert "This paper explores a novel approach to widget engineering." not in html
+    assert "本文探索了一种新颖的组件工程方法。" not in html
 
 
 def test_presentation_shows_tldr_with_bilingual_labels():
@@ -160,19 +162,23 @@ def test_mixed_legacy_and_presentation_papers_render_together():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("field", ["title", "abstract", "tldr"])
-def test_missing_zh_shows_bilingual_notice_with_original_text(field):
-    text = BilingualText(en="Fallback original text", zh=None)
-    presentations = {
-        "title": PaperPresentation(title=text),
-        "abstract": PaperPresentation(abstract=text),
-        "tldr": PaperPresentation(tldr=text),
-    }
-    paper = make_sample_paper(presentation=presentations[field])
+def test_missing_zh_title_shows_bilingual_notice_with_original_text():
+    presentation = PaperPresentation(title=BilingualText(en="Fallback original text", zh=None))
+    paper = make_sample_paper(presentation=presentation)
     html = render_email_bundle([paper]).html
     for marker in _TRANSLATION_NOTICE_MARKERS:
         assert marker in html
     assert "Fallback original text" in html
+
+
+def test_missing_zh_tldr_shows_notice_once_without_original_echo():
+    presentation = PaperPresentation(tldr=BilingualText(en="Fallback original text", zh=None))
+    paper = make_sample_paper(tldr="Fallback original text", presentation=presentation)
+    bundle = render_email_bundle([paper])
+    assert bundle.html.count("Fallback original text") == 1
+    assert f"中文:</strong> {TLDR_UNAVAILABLE_NOTICE}" in bundle.html
+    assert bundle.plain_text.count("Fallback original text") == 1
+    assert f"中文: {TLDR_UNAVAILABLE_NOTICE}" in bundle.plain_text
 
 
 def test_missing_zh_title_is_not_presented_as_chinese():
@@ -185,13 +191,26 @@ def test_missing_zh_title_is_not_presented_as_chinese():
         assert marker in zh_row[:400]
 
 
-def test_missing_en_also_gets_notice_instead_of_blank_row():
-    presentation = PaperPresentation(abstract=BilingualText(en=None, zh="只有中文摘要"))
-    paper = make_sample_paper(presentation=presentation)
-    html = render_email_bundle([paper]).html
-    assert "只有中文摘要" in html
-    for marker in _TRANSLATION_NOTICE_MARKERS:
-        assert marker in html
+def test_missing_en_tldr_shows_zh_once_plus_notice():
+    presentation = PaperPresentation(tldr=BilingualText(en=None, zh="只有中文总结"))
+    paper = make_sample_paper(tldr=None, presentation=presentation)
+    bundle = render_email_bundle([paper])
+    assert bundle.html.count("只有中文总结") == 1
+    assert f"EN:</strong> {TLDR_UNAVAILABLE_NOTICE}" in bundle.html
+    assert bundle.plain_text.count("只有中文总结") == 1
+
+
+def test_bilingual_tldr_missing_both_shows_single_notice_not_abstract_twice():
+    paper = make_presented_paper(
+        tldr=None,
+        presentation=PaperPresentation(
+            title=BilingualText(en="Sample Paper Title", zh="示例论文标题"),
+        ),
+    )
+    bundle = render_email_bundle([paper])
+    assert bundle.html.count(TLDR_UNAVAILABLE_NOTICE) == 1
+    assert bundle.plain_text.count(TLDR_UNAVAILABLE_NOTICE) == 1
+    assert "This paper explores a novel approach to widget engineering." not in bundle.html
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +314,6 @@ def test_figure_exactly_at_limit_is_kept():
     ("field", "evil"),
     [
         ("title", "<script>alert(1)</script>"),
-        ("abstract", "<img src=x onerror=alert(2)>"),
         ("tldr", "<b>bold & sneaky</b>"),
     ],
 )
@@ -303,7 +321,6 @@ def test_presentation_text_is_escaped(field, evil):
     bilingual = BilingualText(en=evil, zh=evil)
     presentations = {
         "title": PaperPresentation(title=bilingual),
-        "abstract": PaperPresentation(abstract=bilingual),
         "tldr": PaperPresentation(tldr=bilingual),
     }
     paper = make_sample_paper(presentation=presentations[field])
@@ -312,6 +329,15 @@ def test_presentation_text_is_escaped(field, evil):
     assert "<img src=x" not in html
     assert "<b>bold" not in html
     assert "&lt;script&gt;" in html or "&lt;b&gt;" in html or "&lt;img" in html
+
+
+def test_malicious_abstract_never_renders_anywhere():
+    evil = "<img src=x onerror=alert(2)>"
+    paper = make_sample_paper(abstract=evil, tldr=evil)
+    paper.presentation = PaperPresentation(abstract=BilingualText(en=evil, zh=evil))
+    bundle = render_email_bundle([paper])
+    assert "<img src=x" not in bundle.html
+    assert evil not in bundle.plain_text
 
 
 def test_legacy_paper_text_is_escaped_too():

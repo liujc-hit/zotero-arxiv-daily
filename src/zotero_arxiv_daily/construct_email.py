@@ -2,6 +2,7 @@ from .protocol import Paper
 from .email_presentation import (
     PIN_BADGE as _PIN_BADGE,
     admit_figure_cids,
+    display_tldr,
     esc,
     figure_html_for,
     format_authors,
@@ -148,7 +149,8 @@ def _render_paper_block(p:Paper, pinned:bool=False, cid:str|None=None) -> str:
     else:
         affiliations = 'Unknown Affiliation'
     if p.presentation is None or not p.presentation.bilingual_enabled:
-        return get_block_html(p.title, authors, rate, p.tldr, p.pdf_url or p.url, affiliations,
+        # display_tldr guards the legacy raw-abstract fallback out of the card.
+        return get_block_html(p.title, authors, rate, display_tldr(p), p.pdf_url or p.url, affiliations,
                               pinned=pinned, figure_html=figure_html_for(p.presentation, cid))
     return render_presentation_block(
         p, p.presentation,
