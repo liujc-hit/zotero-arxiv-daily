@@ -18,6 +18,7 @@ from tests.test_llm_diagnostics import (
 from zotero_arxiv_daily.bilingual_generation import generate_bilingual_digest
 from zotero_arxiv_daily.llm import LlmValue, SdkArgument, StructuredOutput, _request_llm
 from zotero_arxiv_daily.paper_presentation import PaperPresentation
+from zotero_arxiv_daily.paper_generation import GENERATION_FAILED_TLDR
 
 if TYPE_CHECKING:
     from loguru import Message
@@ -126,7 +127,7 @@ def test_fallback_when_matching_tool_is_bad_despite_valid_body(logs: list[Messag
     (json.dumps(payload() | {"title_en": 42}), "schema_validation"),
     (json.dumps(payload() | {"title_en": ""}), "schema_validation"),
     (json.dumps(payload() | {"title_en": "x" * 2049}), "schema_validation"),
-    (json.dumps(payload() | {"abstract_zh": ""}), "schema_validation"),
+    (json.dumps(payload() | {"tldr_zh": ""}), "schema_validation"),
     (json.dumps(payload() | {"unrequested": "value"}), "schema_validation"),
     (json.dumps(payload() | {SECRET: SECRET}), "schema_validation"),
 ])
@@ -139,7 +140,7 @@ def test_rejects_entire_unusable_body_without_repair(logs: list[Message], case: 
     result = generate_bilingual_digest(original, client, params())
     # Then
     assert result == PaperPresentation() and len(calls) == 1
-    assert original.tldr == original.abstract and original.affiliations is None
+    assert original.tldr == GENERATION_FAILED_TLDR and original.affiliations is None
     assert fields(logs)["reason"] == reason
 
 

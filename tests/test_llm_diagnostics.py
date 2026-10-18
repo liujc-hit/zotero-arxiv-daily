@@ -22,6 +22,7 @@ from tests.test_bilingual_generation import payload
 from zotero_arxiv_daily.bilingual_generation import InvalidBilingualDigestError, generate_bilingual_digest
 from zotero_arxiv_daily.llm import ApiMode, LlmValue, SdkArgument, _Response as LlmResponse, _request_llm
 from zotero_arxiv_daily.paper_presentation import PaperPresentation
+from zotero_arxiv_daily.paper_generation import GENERATION_FAILED_TLDR
 from zotero_arxiv_daily.protocol import Paper
 
 if TYPE_CHECKING:
@@ -77,7 +78,7 @@ def test_safe_warning_when_request_fails(logs: list[Message], failure: Exception
     assert visible["http_status"] == status
     assert visible["finish_reason"] == "unknown"
     assert visible["exception_type"] == ("unknown" if reason == "other" else type(failure).__name__)
-    assert result == PaperPresentation() and original.tldr == SECRET
+    assert result == PaperPresentation() and original.tldr == GENERATION_FAILED_TLDR
     assert original.affiliations is None and len(calls) == 1
 
 
@@ -85,9 +86,9 @@ def test_safe_warning_when_request_fails(logs: list[Message], failure: Exception
     ("{}", "schema_validation", "title_en", "missing"),
     ("{" + SECRET, "invalid_json", "-", "json_invalid"),
     (json.dumps(payload() | {"title_en": ""}), "schema_validation", "title_en", "string_too_short"),
-    (json.dumps({k: v for k, v in payload().items() if k != "abstract_en"}), "schema_validation", "abstract_en", "missing"),
+    (json.dumps({k: v for k, v in payload().items() if k != "tldr_zh"}), "schema_validation", "tldr_zh", "missing"),
     (json.dumps(payload() | {SECRET: SECRET}), "schema_validation", "other", "extra_forbidden"),
-    (json.dumps(payload() | {"abstract_zh": ""}), "schema_validation", "-", "-"),
+    (json.dumps(payload() | {"affiliations": "invalid"}), "schema_validation", "affiliations", "list_type"),
     (" " * 100001, "bounds", "-", "-"),
 ])
 def test_safe_warning_when_payload_fails(logs: list[Message], body: str, reason: str, field: str, kind: str) -> None:
