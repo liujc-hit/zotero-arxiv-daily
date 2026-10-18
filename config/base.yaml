@@ -59,7 +59,7 @@ enrichment:
 
 email:
   bilingual:
-    enabled: true # English/Chinese title, abstract and TL;DR for final selected papers only; false keeps the legacy llm.language digest.
+    enabled: true # English/Chinese titles and TL;DRs for final selected papers only; source abstracts remain input only. False keeps the legacy llm.language digest.
   figures:
     enabled: true # Best-effort first research figure for final selected papers only; independent of bilingual. Raw image budget: 8 MiB per email.
   sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
@@ -105,7 +105,8 @@ executor:
   send_empty: false # Whether to send an empty email even if no new papers today. Example: true
   max_paper_num: 100 # The maximum number of the papers presented in the email. Example: 100
   min_score: null # Minimum reranker score (0-10 scale) for a paper to appear in the email. Papers scoring below the floor are dropped; pinned papers bypass it. null disables the floor. Raise for precision, lower for recall. Example: 5.0
-  pin_keywords: null # List of keywords to force-pin to the TOP of the email, on top of the recommendation algorithm. A paper whose title OR abstract contains any keyword (case-insensitive) is pinned. Pinned papers do NOT count against max_paper_num. Example: ["Mamba","state space model"]
+  pin_keywords: null # List of keywords to pin to the TOP of the email when pinned_min_score is met. Matches title OR abstract (case-insensitive). Pinned papers do NOT count against max_paper_num. Example: ["Mamba","state space model"]
+  pinned_min_score: 4.9 # Independent minimum finite reranker score for keyword pinning. Lower/unknown scores stay in the normal pool; min_score and max_paper_num apply there. Invalid/null values fall back to 4.9.
   max_pinned_num: 20 # Upper bound on pinned papers per email. Matches beyond this cap fall back to the normal recommendation pool. Example: 20
   enrich_workers: 8 # Requested parallel workers for final pinned + top-N enrichment; effective count is capped at 4 and the selected paper count. Lower if your provider rate-limits you.
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv','openalex','pubmed']

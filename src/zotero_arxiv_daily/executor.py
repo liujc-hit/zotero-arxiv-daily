@@ -16,6 +16,7 @@ from .paper_identity import filter_sent_paper_candidates, paper_identities
 from .retrieval import retrieve_and_merge
 from .sent_doi_state import build_sent_doi_state_store
 import random
+from math import isfinite
 from datetime import datetime
 from functools import cached_property
 from .reranker import get_reranker_cls
@@ -167,10 +168,10 @@ class Executor:
             logger.info("Reranking papers...")
             reranked_papers = self.reranker.rerank(all_papers, corpus)
             # Keyword pinning sits ON TOP of the recommendation algorithm:
-            # papers matching a configured keyword are force-pinned to the top of
+            # papers matching a configured keyword and pinned_min_score go to the top of
             # the email and do NOT count against max_paper_num, so they never
             # displace the algorithm's picks. It scans the full retrieved set so
-            # that low-scored-but-keyword-matched papers are still surfaced.
+            # that eligible matches below the ordinary min_score still surface.
             pinned_papers, reranked_papers = self._select_pinned(reranked_papers)
             reranked_papers = self._apply_min_score(reranked_papers)
             reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
@@ -265,39 +266,55 @@ class Executor:
         except Exception:
             return 20
 
+    def _pinned_min_score(self) -> float:
+        """Resolve the independent pinning floor; invalid values keep 4.9."""
+        val = getattr(self.config.executor, "pinned_min_score", 4.9)
+        if val is True or val is False:
+            return 4.9
+        try:
+            floor = float(val)
+        except (TypeError, ValueError, OverflowError):
+            return 4.9
+        return floor if isfinite(floor) else 4.9
+
     def _select_pinned(self, papers: list[Paper]) -> tuple[list[Paper], list[Paper]]:
         """Split out keyword-pinned papers.
 
-        Returns ``(pinned, remaining)``. ``papers`` is assumed score-sorted
-        (as produced by the reranker); both outputs preserve that order. Pinned
+        Returns ``(pinned, remaining)`` in the reranker's original relative order,
+        including any MMR diversification. Only finite scores at or above
+        ``pinned_min_score`` qualify for pinning. Pinned
         papers are additive: they do not consume ``max_paper_num`` slots. A
         ``max_pinned_num`` cap bounds the pinned section; matches beyond the cap
         flow back into ``remaining`` so they can still surface via the algorithm.
         """
         keywords = self._pin_keywords()
-        if not keywords or len(papers) == 0:
-            return [], papers
-
+        floor = self._pinned_min_score()
+        cap = self._max_pinned_num()
         pinned: list[Paper] = []
         remaining: list[Paper] = []
+        eligible_matches = 0
         for p in papers:
-            if _paper_matches_keywords(p, keywords):
+            p.pinned = False
+            eligible = (
+                p.score is not None
+                and isfinite(p.score)
+                and p.score >= floor
+                and _paper_matches_keywords(p, keywords)
+            )
+            if eligible:
+                eligible_matches += 1
+            if eligible and len(pinned) < cap:
                 p.pinned = True
                 pinned.append(p)
             else:
                 remaining.append(p)
 
-        cap = self._max_pinned_num()
-        if len(pinned) > cap:
-            overflow = pinned[cap:]
-            pinned = pinned[:cap]
-            # papers is score-sorted, so overflow entries are the lower-scored
-            # matches; prepending keeps remaining score-sorted for the top-N slice.
-            remaining = overflow + remaining
+        if eligible_matches > cap:
             logger.warning(
-                f"{cap + len(overflow)} papers matched pin keywords; capping the "
+                f"{eligible_matches} papers matched pin keywords at or above "
+                f"pinned_min_score={floor}; capping the "
                 f"pinned section to {cap} (max_pinned_num). The remaining "
-                f"{len(overflow)} will compete via the normal recommendation. "
+                f"{eligible_matches - cap} will compete via the normal recommendation. "
                 f"Raise max_pinned_num to keep more."
             )
         if pinned:

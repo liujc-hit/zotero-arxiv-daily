@@ -134,7 +134,7 @@ def test_select_pinned_splits_by_keyword_in_title_or_abstract():
     papers = [
         _pin_paper("Transformers", "attention is all you need", score=9.0, url="u2"),
         _pin_paper("Mamba: Linear-Time Sequence Models", "a new ssm", score=5.0, url="u1"),
-        _pin_paper("A Survey of SSMs", "we discuss mamba models at length", score=2.0, url="u3"),
+        _pin_paper("A Survey of SSMs", "we discuss mamba models at length", score=4.95, url="u3"),
     ]
     pinned, remaining = ex._select_pinned(papers)
     assert [p.url for p in pinned] == ["u1", "u3"]
@@ -146,7 +146,7 @@ def test_select_pinned_splits_by_keyword_in_title_or_abstract():
 def test_select_pinned_is_case_insensitive():
     ex = _make_pin_executor(pin_keywords=["MAMBA"], max_pinned_num=20)
     papers = [
-        _pin_paper("SSMs", "based on the mamba architecture", score=1.0, url="a"),
+        _pin_paper("SSMs", "based on the mamba architecture", score=4.95, url="a"),
         _pin_paper("Other", "nothing relevant", score=9.0, url="b"),
     ]
     pinned, remaining = ex._select_pinned(papers)
@@ -155,19 +155,20 @@ def test_select_pinned_is_case_insensitive():
 
 
 def test_select_pinned_respects_cap_and_returns_overflow_to_pool():
-    # cap=1 but two keyword matches: highest-scored match is pinned, the other
+    # cap=1 but two eligible keyword matches: the first match is pinned, the other
     # flows back into the remaining pool.
     ex = _make_pin_executor(pin_keywords=["mamba"], max_pinned_num=1)
     papers = [
         _pin_paper("Mamba A", "x", score=5.0, url="a"),
-        _pin_paper("Mamba B", "x", score=4.0, url="b"),
+        _pin_paper("Mamba B", "x", score=4.95, url="b"),
         _pin_paper("Other", "x", score=9.0, url="c"),
     ]
     pinned, remaining = ex._select_pinned(papers)
-    assert [p.url for p in pinned] == ["a"]  # capped to 1, highest-scored match
+    assert [p.url for p in pinned] == ["a"]  # capped to 1, first eligible match
     remaining_urls = [p.url for p in remaining]
     assert "b" in remaining_urls  # overflow returned to pool
     assert "c" in remaining_urls
+    assert all(not p.pinned for p in remaining)
 
 
 def test_select_pinned_no_keywords_returns_empty_and_passthrough():
@@ -183,7 +184,7 @@ def test_select_pinned_empty_keywords_strings_are_ignored():
     # an empty/whitespace keyword would otherwise match every paper
     ex = _make_pin_executor(pin_keywords=["", "  ", "mamba"], max_pinned_num=20)
     papers = [
-        _pin_paper("Mamba", "x", score=1.0, url="a"),
+        _pin_paper("Mamba", "x", score=4.95, url="a"),
         _pin_paper("Totally Unrelated", "x", score=9.0, url="b"),
     ]
     pinned, remaining = ex._select_pinned(papers)
