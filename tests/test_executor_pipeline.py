@@ -186,7 +186,7 @@ def test_run_passes_pinned_then_normal_to_final_enrichment_with_default_workers(
     malformed_workers,
 ) -> None:
     # Given: one pinned and one normal selection plus malformed worker config.
-    pinned = paper("Pinned topic", 1.0)
+    pinned = paper("Pinned topic", 4.95)  # Meets the independent pinning floor.
     normal = paper("Normal topic", 9.0)
     runtime_executor.config = executor_config(
         max_paper_num=1,

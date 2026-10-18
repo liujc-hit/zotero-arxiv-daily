@@ -125,7 +125,8 @@ def pipeline(config: DictConfig, monkeypatch: pytest.MonkeyPatch):
     config.email.figures.enabled = True
     config.executor.max_paper_num = 1
     config.executor.pin_keywords = ["Pinned"]
-    candidates = [paper("Top", 9), paper("Dropped", 8), paper("Pinned", 1)]
+    # Score must meet the independent pinned_min_score floor (4.9) to be pinned.
+    candidates = [paper("Top", 9), paper("Dropped", 8), paper("Pinned", 5)]
     instance = execution.Executor.__new__(execution.Executor)
     instance.config = config
     monkeypatch.setattr(instance, "openai_client", make_recording_client()[0], raising=False)
@@ -191,7 +192,7 @@ def test_selected_only_when_sending_bundle_saves_only_after_success(pipeline, mo
     assert set(generated) == set(fetched) == {"Pinned", "Top"}
     assert rendered == [candidates[2], candidates[0]]
     assert [p.title for p in candidates] == ["Top", "Dropped", "Pinned"]
-    assert [p.score for p in candidates] == [9, 8, 1]
+    assert [p.score for p in candidates] == [9, 8, 5]
     assert candidates[2].pinned and candidates[1].presentation is None
     assert events == (["send"] if delivery_fails else ["send", "save"])
     assert saved == ([] if delivery_fails else [{"url:https://example.org/Pinned", "url:https://example.org/Top"}])
@@ -279,13 +280,13 @@ def test_real_bundle_when_bilingual_generation_succeeds(pipeline, monkeypatch: p
     import json
     from zotero_arxiv_daily import executor as execution
 
-    # Given a real bilingual generator, renderer and a local structured SDK response.
+    # Given a real bilingual generator, renderer and a local structured SDK response
+    # carrying the five contract keys (titles, TLDRs, affiliations; no abstract fields).
     instance, _, events, saved = pipeline
     instance.config.llm.api_mode = "chat_completion"
     instance.config.llm.thinking = None
     client, calls = make_recording_client(json.dumps({
-        "title_en": "Title", "title_zh": "译名", "abstract_en": "Abstract",
-        "abstract_zh": "中文摘要", "tldr_en": "Digest", "tldr_zh": "中文总结",
+        "title_en": "Title", "title_zh": "译名", "tldr_en": "Digest", "tldr_zh": "中文总结",
         "affiliations": ["Institution"],
     }))
     instance.openai_client = client
@@ -295,7 +296,8 @@ def test_real_bundle_when_bilingual_generation_succeeds(pipeline, monkeypatch: p
 
     def send(config, html: str, *, inline_images=(), plain_text="") -> None:
         assert "译名" in html and "cid:" in html
-        assert "中文摘要" in plain_text
+        assert "中文总结" in html and "中文总结" in plain_text
+        assert "Original abstract" not in html and "Original abstract" not in plain_text
         assert len(inline_images) == 2
         assert all(image.data == png for image in inline_images)
         events.append("send")

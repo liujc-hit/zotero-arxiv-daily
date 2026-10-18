@@ -34,10 +34,12 @@ def test_run_saves_only_old_union_exact_emailed_identities_after_smtp(
     runtime.store.loaded = frozenset({OLD_IDENTITY})
     top = paper("normal top", TOP_DOI, 9.0)
     excluded = paper("normal excluded", EXCLUDED_DOI, 8.0)
-    pinned = paper("pin valid", "https://doi.org/10.1000/PINNED", 2.0)
-    invalid = paper("pin invalid", "invalid", 1.0)
-    missing = paper("pin missing", None, 0.5)
+    # Qualify for pinning while remaining below the ordinary relevance floor.
+    pinned = paper("pin valid", "https://doi.org/10.1000/PINNED", 4.95)
+    invalid = paper("pin invalid", "invalid", 4.95)
+    missing = paper("pin missing", None, 4.95)
     runtime.executor.config.executor.pin_keywords = ["pin"]
+    runtime.executor.config.executor.min_score = 5.0
     setattr(
         runtime.executor,
         "retrievers",
