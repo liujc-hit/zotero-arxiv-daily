@@ -36,9 +36,9 @@
 - Optional pre-rerank abstract enrichment for published papers missing an abstract: providers are routed directly, in the fixed priority IEEE Xplore > Elsevier > Springer Nature > PubMed, at most two matched providers are attempted per paper, and the first nonblank abstract wins.
 - Optional venue prestige weighting built from OpenAlex's open citation statistics.
 - AI-generated TL;DR and resolved author affiliations for every paper in the email, through at most one strict structured LLM request per paper.
-- English/Chinese titles, full abstracts and TL;DRs, plus best-effort first research figures embedded in email; both features default on with independent opt-outs.
+- English/Chinese titles and TL;DRs, plus best-effort first research figures embedded in email; both features default on with independent opt-outs. Source and translated abstracts are never part of the email.
 - Links to PDF and code implementation (when available) in the email.
-- Keyword pinning force-matches topics you care about to the top of the email.
+- Keyword pinning force-matches topics you care about to the top of the email when they also clear an independent score floor.
 - Curate which Zotero collections drive recommendations using glob patterns.
 
 ## 📷 Screenshot
@@ -89,7 +89,7 @@
    | VENUE_PRESTIGE_ENABLED | No | Enables OpenAlex venue citation proxy weighting in the reranker. Default `false`. | true |
    | OPENALEX_ALLOW_ANONYMOUS | No | Only an explicit `true` lets OpenAlex fall back to keyless anonymous requests when no configured key is usable. Anything else (including unset) means no anonymous access; a requested `openalex` source with no key is then replaced by `crossref` at startup. | true |
     | SENT_DOI_STATE_ENABLED | No | Enables persistent cross-run deduplication: papers whose identity (valid DOI or DOI-resolver URL, else canonical arXiv ID, else normalized stable URL) was already emailed are skipped in later runs. The DOI-named variable is a retained legacy name. Requires the `SENT_DOI_STATE_KEY` Secret. Unset (and anything but `true`) resolves to `false`. | true |
-    | EMAIL_BILINGUAL_ENABLED | No | With the overlay below, enables English/Chinese title, abstract and TL;DR presentation. Defaults to `true`; set `false` for legacy single-language digests. | false |
+    | EMAIL_BILINGUAL_ENABLED | No | With the overlay below, enables English/Chinese title and TL;DR presentation. The email never shows abstracts. Defaults to `true`; set `false` for legacy single-language digests. | false |
     | EMAIL_FIGURES_ENABLED | No | With the overlay below, enables best-effort first research figures. Defaults to `true`, independently of bilingual presentation. | false |
 
 4. Paste this full-capability configuration into the value of `CUSTOM_CONFIG`. Every optional feature is present and wired to a repository Variable or Secret, so toggling a feature never means editing YAML:
@@ -200,7 +200,8 @@
       send_empty: false
       max_paper_num: 100
       min_score: null  # Or e.g. 5.0 to drop weak matches (0-10 scale).
-      pin_keywords: null  # Or e.g. ["Mamba", "world model"] to force-pin matching papers.
+      pin_keywords: null  # Or e.g. ["Mamba", "world model"] to pin matching papers that also clear pinned_min_score.
+      pinned_min_score: 4.9  # Independent minimum finite reranker score for keyword pinning; lower/unknown scores stay in the normal pool. Invalid/null values fall back to 4.9.
       max_pinned_num: 20
       enrich_workers: 8
       source: ${oc.decode:${oc.env:PAPER_SOURCES,'["arxiv","openalex"]'}}
@@ -260,22 +261,34 @@ Disabling both restores the legacy positional enrichment call and HTML/digest pa
 without requiring presentation keywords from existing integrations. `llm.language` still chooses
 the legacy TL;DR field; bilingual presentation explicitly supplies both languages.
 
-- **Coverage:** bilingual title, complete abstract translation and one-sentence
-  TL;DR share the same single structured LLM request as affiliations. Source title
-  and abstract, author metadata, DOI/URL identity, score, pinning and recommendation
-  order are not replaced. Only the final pinned + top-N list is enriched, never
-  the discarded candidate pool. Existing retrieval, abstract-enrichment and venue
-  weighting settings remain independent.
-- **Fallback:** unavailable/invalid translations leave the original source text
-  visible rather than inventing a translation. The legacy digest falls back to
-  the abstract (or the existing no-content/failure indicator). Optional figure
-  failures omit the image without removing the paper or failing delivery.
-  Figure discovery covers explicitly labeled Figure 1 on arXiv HTML and
-  bioRxiv/medRxiv HTML pages, using original verified PNG/JPEG bytes from the same
-  source host. Publisher pages, PDF-only papers, SVG/vector-only figures, separate
-  panels and ambiguous/missing figures are omitted; there is no PDF screenshot
-  fallback. Logos and arbitrary remote images are not research figures.
-  No figure is a valid outcome.
+- **Coverage:** bilingual titles and one-sentence TL;DRs share the same single
+  structured LLM request as affiliations. The response contract is five fields:
+  `title_en`, `title_zh`, `tldr_en`, `tldr_zh`, and `affiliations` — the email
+  carries no abstract fields at all. Source title and abstract, author metadata,
+  DOI/URL identity, score, pinning and recommendation order are not replaced
+  (the abstract still drives ranking, full-text generation and keyword
+  matching — it is simply not emailed). Only the final pinned + top-N list is
+  enriched, never the discarded candidate pool. Existing retrieval,
+  abstract-enrichment and venue weighting settings remain independent.
+- **Fallback:** each bilingual paper shows the structured English TLDR and the
+  Chinese TLDR exactly once each. When a language is missing, its labeled row
+  shows a stable `(TLDR unavailable / 总结暂缺)` notice instead of echoing other
+  text; when both are missing, a single notice replaces the row pair. The
+  source or translated abstract is never rendered in any mode, and the legacy
+  single-language path collapses a TLDR that is merely the raw abstract into
+  the same notice. A genuine structured TLDR that legitimately equals a
+  one-sentence abstract still displays. Optional figure failures omit the
+  image without removing the paper or failing delivery.
+  Figure discovery covers explicitly labeled Figure 1 on arXiv HTML pages
+  (the article identity is recognized from arXiv `abs`/`html`/`pdf` URLs,
+  including an arXiv PDF URL carrying the paper's primary identity) and
+  bioRxiv/medRxiv HTML pages, using original verified PNG/JPEG bytes from the
+  same source host. Publisher pages, PDF-only papers, SVG/vector-only figures,
+  separate panels and ambiguous/missing figures are omitted; there is no PDF
+  screenshot fallback and no guarantee that every paper gets a figure. Logos
+  and arbitrary remote images are not research figures. No figure is a valid
+  outcome, and the source-specific coverage above is not a claim that every
+  arXiv or bioRxiv paper in a real run resolves to an embeddable figure.
 - **Cost and bounds:** bilingual output requires more tokens than a single-language
   digest, but does not add a second LLM call. The shared OpenAI client uses a
   45-second request timeout with SDK retries disabled. Final enrichment runs at
@@ -429,10 +442,10 @@ Each run is a linear pipeline (`src/zotero_arxiv_daily/executor.py`):
 5. **Drop already-sent papers**: candidates whose canonical identity is in the loaded state are removed, after the DOI merge and before enrichment; papers without a persistable identity always pass through (details above).
 6. **Pre-rerank enrichment**: optional abstract enrichment and venue citation proxies are applied to the candidate pool (details above).
 7. **Rerank**: embed the **title + abstract** of every candidate and corpus paper, apply the optional venue multiplier, then score, sort, and optionally diversify candidates (details below).
-8. **Keyword pinning**: papers whose title or abstract contains any `executor.pin_keywords` entry (case-insensitive) are split out and pinned; the pinned section is capped at `executor.max_pinned_num`, overflow returns to the ranked pool.
+8. **Keyword pinning**: papers whose title or abstract contains any `executor.pin_keywords` entry (case-insensitive) and whose finite score meets the independent `executor.pinned_min_score` floor (default 4.9) are split out and pinned, preserving the ranked order; scores below the floor, unknown scores, and matches beyond the `executor.max_pinned_num` cap stay in the ranked pool in their original order with no pin flag. Pinned papers bypass the later relevance floor.
 9. **Relevance floor**: papers scoring below `executor.min_score` are dropped from the ranked pool (pinned papers bypass the floor).
 10. **Top-N cut**: the ranked pool is truncated to `executor.max_paper_num`.
-11. **Lazy enrichment**: only for the final list (pinned + top-N), full text is fetched on demand where missing, then bilingual presentation (default on), TL;DR and affiliations share at most one strict structured JSON request per paper. At most four workers run, bounded further by `executor.enrich_workers`; papers without usable content make no request, and a failed request falls back to the abstract as the TL;DR. Optional first figures are fetched here and admitted within an 8-MiB raw-image budget in final display order.
+11. **Lazy enrichment**: only for the final list (pinned + top-N), full text is fetched on demand where missing, then bilingual presentation (default on): titles, one-sentence TLDRs and affiliations share at most one strict structured JSON request per paper (five response fields; no abstract fields). At most four workers run, bounded further by `executor.enrich_workers`; papers without usable content make no request. A failed request never puts the raw abstract in the email: unavailable TLDRs render as a stable notice instead. Optional first figures are fetched here and admitted within an 8-MiB raw-image budget in final display order.
 12. **Render and send**: the email retains the existing card layout with optional bilingual fields and inline figures, plus a plain-text alternative; only after SMTP succeeds are the emailed papers' identities merged back into the sent state. Both feature flags off keep the legacy HTML path.
 
 If nothing survives steps 4-10 and `executor.send_empty` is false, no email is sent.
@@ -446,7 +459,7 @@ Four optional refinements:
 - **Recency weighting** (`reranker.recency_half_life_days`): the top-k matches are weighted by `exp(-age / half_life)` based on when each paper was added to Zotero, so your current direction dominates. `null` (default) disables it.
 - **MMR diversification** (`reranker.mmr_lambda`): reorders the leading candidates by Maximal Marginal Relevance so near-duplicates don't fill consecutive email slots. Ordering only; scores are untouched. MMR reuses the candidate embeddings already computed for scoring, so no duplicate model load or embedding pass occurs. `null` (default) keeps pure score order.
 - **Venue prestige** (`reranker.venue_prestige`): multiplies scores by a bounded factor derived from OpenAlex's open per-venue citation statistics (details above). Default off.
-- **Keyword pinning** (`executor.pin_keywords`): additive on top of the algorithm. Pinned papers appear above the recommendations, never consume `max_paper_num` slots, and are bounded by `max_pinned_num`.
+- **Keyword pinning** (`executor.pin_keywords`): additive on top of the algorithm. Keyword matches that also clear `executor.pinned_min_score` (default 4.9) appear above the recommendations, never consume `max_paper_num` slots, and are bounded by `max_pinned_num`; everything else — including below-floor and unknown scores and cap overflow — competes through the normal ranking in its original order.
 
 Full text never participates in ranking. It is fetched only for papers that already made the email, to feed TL;DR and affiliation generation.
 
