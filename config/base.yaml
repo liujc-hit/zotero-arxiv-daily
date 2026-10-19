@@ -112,6 +112,15 @@ executor:
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv','openalex','pubmed']
   reranker: local # The reranker to use. Example: 'local' or 'api'
 
+compute_cache:
+  enabled: false # Optional encrypted vectors/scores; invalid settings warn and bypass caching.
+  key: null # Separate Fernet key; never reuse the sent-state key or put credentials in this file.
+  path: .cache/zad-compute # Ciphertext only; workflows fix this path independently of CUSTOM_CONFIG.
+  budget_bytes: 8000000000 # Decimal 8 GB, not GiB; maximum owned remote snapshot budget and separate local ciphertext bound.
+  shard_bytes: 16777216 # Target encrypted shard size (16 MiB); validated by CacheSettings.
+  ttl_days: 7 # Application creation-age TTL, distinct from GitHub's unaccessed-cache retention.
+  model_revision: null # Required when enabled: owner-provided model revision/version epoch; bump whenever upstream model weights change.
+
 sent_doi_state:
   enabled: false # Whether to persist the canonical identities of sent papers in an encrypted local file so later runs skip them. Each paper is identified by a valid DOI or DOI-resolver URL first, else the canonical arXiv ID (revisions and abs/pdf variants collapse), else a narrowly normalized stable URL; papers with none are not tracked. The DOI-named section, variables, and file path are retained legacy names. Example: true
   path: .state/sent-dois.fernet # Path of the encrypted sent-state file, authenticated with Fernet and replaced atomically after each successful send. Legacy filename retained. Example: .state/sent-dois.fernet

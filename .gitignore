@@ -18,3 +18,5 @@ test-compose.yml
 outputs
 config/private.yaml
 .state/
+.cache/zad-compute/
+.cache/zad-compute-status.json
