@@ -154,7 +154,7 @@ class Ledger:
                 raise InvalidCache()
         elif self.sizes:
             raise InvalidCache()
-        if not self.dirty:
+        if not self.dirty and self.bytes_used <= self.settings.budget_bytes:
             return
         self._collect_orphans()
         # Admission already reserved a worst-case complete index and its temp.
@@ -163,6 +163,16 @@ class Ledger:
                             or self.bytes_used + manifest_cipher_bound(len(self.lru)) > self.settings.budget_bytes):
             self._drop(next(iter(self.lru)))
         data = self._manifest_bytes()
+        if not self.lru and self.bytes_used + len(data) > self.settings.budget_bytes:
+            # An empty cache needs no index; discard the obsolete one before
+            # reserving its replacement, which tiny budgets may not fit at all.
+            if "manifest.enc" in self.sizes:
+                remove_owned(path / "manifest.enc")
+                self._bytes_used -= self.sizes.pop("manifest.enc")
+                self.changed = True
+            if len(data) > self.settings.budget_bytes:
+                self.dirty = False
+                return
         if not manifest_fits(len(self.lru)) or self.bytes_used + len(data) > self.settings.budget_bytes:
             raise InvalidCache()
         atomic_write(self.settings.path / "manifest.enc", data)
