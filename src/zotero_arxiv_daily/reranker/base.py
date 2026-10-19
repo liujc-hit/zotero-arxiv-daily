@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 from abc import ABC
 from datetime import datetime
 from omegaconf import DictConfig
 from ..protocol import Paper, CorpusPaper
 import numpy as np
-from typing import Type
+from typing import Literal, Type
+from .cache_integration import RankingCache, cache_session
+from .cache_contracts import CacheStore
+from .scoring import ScoreContext, aggregate_scores
 
 from .venue_citation_weighting import (
     VenueCitationWeighting,
-    apply_venue_citation_weighting,
     resolve_venue_citation_weighting,
 )
 
@@ -31,8 +35,16 @@ def cosine_similarity(
 
 
 class BaseReranker(ABC):
+    _compute_cache: CacheStore | None
+
     def __init__(self, config:DictConfig):
         self.config = config
+
+    def _cache_backend(self) -> Literal["local", "api"] | None:
+        return None
+
+    def _cache_encode_options(self) -> str:
+        return ""
 
     def _topk(self) -> int:
         """Resolve the top-k aggregation size from config, defensively.
@@ -182,12 +194,37 @@ class BaseReranker(ABC):
         return [candidates[i] for i in selected + tail]
 
     def rerank(self, candidates:list[Paper], corpus:list[CorpusPaper]) -> list[Paper]:
-        if len(corpus) == 0:
+        corpus = sorted(corpus, key=lambda x: x.added_date, reverse=True)
+        half_life = self._recency_half_life_days()
+        context = ScoreContext(
+            topk=self._topk(), half_life=half_life,
+            recency_weights=None if half_life is None else self._recency_weights(corpus, half_life),
+            venue=self._venue_citation_weighting(), mmr_lambda=self._mmr_lambda(),
+            mmr_target=self._mmr_target(len(candidates)),
+        )
+        cache = cache_session(self)
+        key = None if cache is None else cache.score_key(candidates, corpus, context)
+        if cache is not None:
+            restored = cache.restore(key, candidates)
+            if restored is not None:
+                cache.finish()
+                return restored
+        ranked = self._rerank_uncached(candidates, corpus, context, cache)
+        if cache is not None:
+            cache.save(key, candidates, ranked)
+            cache.finish()
+        return ranked
+
+    def _rerank_uncached(
+        self, candidates: list[Paper], corpus: list[CorpusPaper],
+        context: ScoreContext, cache: RankingCache | None,
+    ) -> list[Paper]:
+        """Keep plugin scoring authoritative; context/cache are per-call seams."""
+        if len(corpus) == 0 or (cache is not None and not candidates):
             for c in candidates:
                 c.score = 0.0
             return candidates
 
-        corpus = sorted(corpus, key=lambda x: x.added_date, reverse=True)
         n_corpus = len(corpus)
 
         # Embed title + abstract. Titles carry the strongest topical signal and
@@ -196,7 +233,10 @@ class BaseReranker(ABC):
         corp_texts = [f"{c.title}\n{c.abstract}".strip() for c in corpus]
         candidate_embeddings: np.ndarray | None
         try:
-            embeddings = self.get_embeddings(cand_texts + corp_texts)
+            embeddings = (
+                self.get_embeddings(cand_texts + corp_texts) if cache is None
+                else cache.embeddings(cand_texts + corp_texts)
+            )
         except NotImplementedError:
             candidate_embeddings = None
             sim = self.get_similarity_score(cand_texts, corp_texts)
@@ -206,44 +246,7 @@ class BaseReranker(ABC):
             sim = cosine_similarity(candidate_embeddings, corpus_embeddings)
         assert sim.shape == (len(candidates), n_corpus)
 
-        # Top-k mean aggregation: score each candidate by the mean of its k
-        # highest similarities to the corpus, rather than a (recency-weighted)
-        # mean over the *entire* library. Averaging over the whole library is a
-        # dilution trap: it pushes broadly-mediocre papers above papers that are
-        # strongly relevant to a focused slice of the library — the main cause of
-        # "recommended papers feel unrelated". Taking the best k matches keeps a
-        # paper's score driven by the corpus it actually aligns with, while still
-        # tolerating multiple research directions.
-        #
-        # Optional recency weighting (reranker.recency_half_life_days): within
-        # those k best matches, papers added to Zotero more recently get an
-        # exp(-age/half_life) weight, so the user's current research direction
-        # dominates. Disabled by default (null) — plain top-k mean.
-        k = min(self._topk(), n_corpus)
-        if k >= n_corpus:
-            topk_idx = np.tile(np.arange(n_corpus), (len(candidates), 1))
-        else:
-            # indices of the k largest similarities per candidate row
-            topk_idx = np.argpartition(sim, -k, axis=1)[:, -k:]
-        topk_sim = np.take_along_axis(sim, topk_idx, axis=1)
-
-        half_life = self._recency_half_life_days()
-        if half_life is not None:
-            rec_weights = self._recency_weights(corpus, half_life)[topk_idx]  # (n_cand, k)
-            denom = rec_weights.sum(axis=1)
-            denom[denom == 0] = 1.0  # all-decayed edge case: fall back to mean
-            scores = (topk_sim * rec_weights).sum(axis=1) / denom
-        else:
-            scores = topk_sim.mean(axis=1)
-        scores = scores * 10.0  # keep the historical ~0-10 score scale
-
-        venue_weighting = self._venue_citation_weighting()
-        if venue_weighting is not None:
-            scores = apply_venue_citation_weighting(
-                scores,
-                candidates,
-                venue_weighting,
-            )
+        scores = aggregate_scores(sim, candidates, context)
 
         # Score adjustments belong here so papers and features share one final
         # stable score-order permutation before optional MMR.
@@ -257,7 +260,7 @@ class BaseReranker(ABC):
         # Optional MMR diversity pass (reranker.mmr_lambda): reorders the top
         # candidates so near-duplicates do not fill consecutive email slots.
         # Disabled (null) by default — pure score order.
-        mmr_lam = self._mmr_lambda()
+        mmr_lam = context.mmr_lambda
         if mmr_lam is not None:
             if candidate_embeddings is None:
                 cand_sim = self.get_similarity_score(cand_texts, cand_texts)

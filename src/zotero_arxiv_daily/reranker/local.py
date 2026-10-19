@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from .base import BaseReranker, register_reranker
 import logging
+import json
 import warnings
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -14,6 +15,15 @@ if TYPE_CHECKING:
 
 @register_reranker("local")
 class LocalReranker(BaseReranker):
+    def _cache_backend(self) -> Literal["local"] | None:
+        return "local" if type(self) is LocalReranker else None
+
+    def _cache_encode_options(self) -> str:
+        return json.dumps(
+            OmegaConf.to_container(OmegaConf.create(self._encode_kwargs), resolve=True),
+            sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
+
     def __init__(self, config: DictConfig):
         super().__init__(config)
         self._encoder: SentenceTransformer | None = None

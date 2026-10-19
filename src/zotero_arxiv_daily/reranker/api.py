@@ -1,8 +1,12 @@
 from .base import BaseReranker, register_reranker
 from openai import OpenAI
+from typing import Literal
 import numpy as np
 @register_reranker("api")
 class ApiReranker(BaseReranker):
+    def _cache_backend(self) -> Literal["api"] | None:
+        return "api" if type(self) is ApiReranker else None
+
     def get_embeddings(self, texts: list[str]) -> np.ndarray:
         client = OpenAI(api_key=self.config.reranker.api.key, base_url=self.config.reranker.api.base_url)
         batch_size = self.config.reranker.api.get("batch_size") or 64
