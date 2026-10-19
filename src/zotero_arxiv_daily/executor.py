@@ -15,7 +15,6 @@ from .presentation_config import PresentationOptions
 from .paper_identity import filter_sent_paper_candidates, paper_identities
 from .retrieval import retrieve_and_merge
 from .sent_doi_state import build_sent_doi_state_store
-import random
 from math import isfinite
 from datetime import datetime
 from functools import cached_property
@@ -116,8 +115,8 @@ class Executor:
         ) for c in corpus]
     
     def filter_corpus(self, corpus:list[CorpusPaper]) -> list[CorpusPaper]:
+        input_count = len(corpus)
         if self.include_path_patterns:
-            logger.info(f"Selecting zotero papers matching include_path: {self.include_path_patterns}")
             corpus = [
                 c for c in corpus
                 if any(
@@ -127,7 +126,6 @@ class Executor:
                 )
             ]
         if self.ignore_path_patterns:
-            logger.info(f"Excluding zotero papers matching ignore_path: {self.ignore_path_patterns}")
             corpus = [
                 c for c in corpus
                 if not any(
@@ -137,9 +135,11 @@ class Executor:
                 )
             ]
         if self.include_path_patterns or self.ignore_path_patterns:
-            samples = random.sample(corpus, min(5, len(corpus)))
-            samples = '\n'.join([c.title + ' - ' + '\n'.join(c.paths) for c in samples])
-            logger.info(f"Selected {len(corpus)} zotero papers:\n{samples}\n...")
+            logger.info(
+                "Zotero corpus filter: input={} output={} removed={} include_enabled={} ignore_enabled={}",
+                input_count, len(corpus), input_count - len(corpus),
+                bool(self.include_path_patterns), bool(self.ignore_path_patterns),
+            )
         return corpus
 
     
@@ -148,14 +148,8 @@ class Executor:
         corpus = self.fetch_zotero_corpus()
         corpus = self.filter_corpus(corpus)
         if len(corpus) == 0:
-            # Never log self.config.zotero wholesale: it contains api_key, and
-            # workflow logs of public repositories are publicly readable.
-            zcfg = self.config.zotero
             logger.error(
-                "No zotero papers found. Please check your zotero settings: "
-                f"user_id={zcfg.get('user_id')}, "
-                f"include_path={zcfg.get('include_path')}, "
-                f"ignore_path={zcfg.get('ignore_path')} (api_key omitted for safety)."
+                "No zotero papers found. Please check your zotero settings and corpus filters (api_key omitted for safety)."
             )
             return
         all_papers = retrieve_and_merge(self.retrievers)
