@@ -52,9 +52,9 @@ def test_state_job_has_scoped_write_permission_and_serialized_updates(
     permissions = job.get("permissions")
     concurrency = workflow.get("concurrency")
 
-    # Then only the job receives write authority and both workflows share one lock.
+    # Then only the job receives state/cache authority and workflows share one lock.
     assert "permissions" not in workflow
-    assert permissions == {"contents": "write"}
+    assert permissions == {"contents": "write", "actions": "write"}
     assert concurrency == {
         "group": _STATE_BRANCH,
         "cancel-in-progress": "false",
@@ -208,8 +208,6 @@ def test_state_lifecycle_has_no_unsafe_fallback_or_logging(workflow_name: str) -
 
     # When unsafe surfaces are inspected, then every failure remains terminal.
     for forbidden in (
-        "continue-on-error",
-        "actions/cache",
         "actions/upload-artifact",
         "api.github.com",
         "set -x",
@@ -217,6 +215,10 @@ def test_state_lifecycle_has_no_unsafe_fallback_or_logging(workflow_name: str) -
         "|| true",
     ):
         assert forbidden not in source
+    for step_name in _STATE_LIFECYCLE_STEPS:
+        state_step = named_step(workflow_name, step_name)
+        assert "continue-on-error" not in state_step
+        assert "actions/cache" not in str(state_step.get("uses", ""))
     assert named_step(workflow_name, "Checkout")["uses"] == "actions/checkout@v6"
     assert named_step(workflow_name, "Checkout").get("with") == {
         "persist-credentials": "false"

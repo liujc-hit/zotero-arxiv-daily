@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write # Trusted compute-cache garbage collection only.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -19,6 +20,32 @@ jobs:
       #  with:
       #    repository: ${{ vars.REPOSITORY }}
       #    ref: ${{ vars.REF }}
+
+      - name: Prepare compute cache
+        id: prepare-compute-cache
+        if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        continue-on-error: true
+        uses: actions/github-script@v8
+        env:
+          COMPUTE_CACHE_PHASE: prepare
+          COMPUTE_CACHE_ENABLED: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (vars.COMPUTE_CACHE_ENABLED || 'false') || 'false' }}
+          COMPUTE_CACHE_KEY: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.COMPUTE_CACHE_KEY || '' }}
+          COMPUTE_CACHE_MODEL_REVISION: ${{ vars.COMPUTE_CACHE_MODEL_REVISION || '' }}
+          COMPUTE_CACHE_BUDGET_BYTES: ${{ vars.COMPUTE_CACHE_BUDGET_BYTES || '8000000000' }}
+        with:
+          retries: 0
+          script: |
+            const computeCache = require("./.github/scripts/compute-cache.cjs");
+            await computeCache({ github, context, core, env: process.env });
+
+      - name: Restore compute cache
+        if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.prepare-compute-cache.outputs.enabled == 'true' }}
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/zad-compute/*.enc
+          key: ${{ steps.prepare-compute-cache.outputs.restore-key }}
+          restore-keys: ${{ steps.prepare-compute-cache.outputs.restore-prefix }}
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v7.1.4
@@ -64,6 +91,10 @@ jobs:
           OPENALEX_ALLOW_ANONYMOUS: ${{ vars.OPENALEX_ALLOW_ANONYMOUS || 'false' }}
           SENT_DOI_STATE_ENABLED: ${{ vars.SENT_DOI_STATE_ENABLED || 'false' }}
           SENT_DOI_STATE_KEY: ${{ secrets.SENT_DOI_STATE_KEY }}
+          COMPUTE_CACHE_ENABLED: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.prepare-compute-cache.outputs.enabled == 'true' && (vars.COMPUTE_CACHE_ENABLED || 'false') || 'false' }}
+          COMPUTE_CACHE_KEY: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.COMPUTE_CACHE_KEY || '' }}
+          COMPUTE_CACHE_MODEL_REVISION: ${{ vars.COMPUTE_CACHE_MODEL_REVISION || '' }}
+          COMPUTE_CACHE_BUDGET_BYTES: ${{ vars.COMPUTE_CACHE_BUDGET_BYTES || '8000000000' }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
         run: |
           export DEBUG=true
@@ -71,7 +102,12 @@ jobs:
           uv run --locked src/zotero_arxiv_daily/main.py \
             '++sent_doi_state.enabled="${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED}}"' \
             '++sent_doi_state.path=.state/sent-dois.fernet' \
-            '++sent_doi_state.key=${oc.env:SENT_DOI_STATE_KEY}'
+            '++sent_doi_state.key=${oc.env:SENT_DOI_STATE_KEY}' \
+            '++compute_cache.enabled="${oc.decode:${oc.env:COMPUTE_CACHE_ENABLED}}"' \
+            '++compute_cache.key=${oc.env:COMPUTE_CACHE_KEY}' \
+            '++compute_cache.model_revision=${oc.env:COMPUTE_CACHE_MODEL_REVISION}' \
+            '++compute_cache.path=.cache/zad-compute' \
+            '++compute_cache.budget_bytes="${oc.decode:${oc.env:COMPUTE_CACHE_BUDGET_BYTES}}"'
 
       - name: Persist encrypted sent DOI state
         if: ${{ success() }}
@@ -85,3 +121,45 @@ jobs:
           script: |
             const persistSentDoiState = require("./.github/scripts/persist-sent-doi-state.cjs");
             await persistSentDoiState({ github, context, core });
+
+      - name: Before save compute cache
+        id: before-save-compute-cache
+        if: ${{ success() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.prepare-compute-cache.outputs.enabled == 'true' }}
+        continue-on-error: true
+        uses: actions/github-script@v8
+        env:
+          COMPUTE_CACHE_PHASE: before-save
+          COMPUTE_CACHE_ENABLED: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (vars.COMPUTE_CACHE_ENABLED || 'false') || 'false' }}
+          COMPUTE_CACHE_KEY: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.COMPUTE_CACHE_KEY || '' }}
+          COMPUTE_CACHE_MODEL_REVISION: ${{ vars.COMPUTE_CACHE_MODEL_REVISION || '' }}
+          COMPUTE_CACHE_BUDGET_BYTES: ${{ vars.COMPUTE_CACHE_BUDGET_BYTES || '8000000000' }}
+        with:
+          retries: 0
+          script: |
+            const computeCache = require("./.github/scripts/compute-cache.cjs");
+            await computeCache({ github, context, core, env: process.env });
+
+      - name: Save compute cache
+        id: save-compute-cache
+        if: ${{ success() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.before-save-compute-cache.outputs.save-allowed == 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/zad-compute/*.enc
+          key: ${{ steps.before-save-compute-cache.outputs.save-key }}
+
+      - name: After save compute cache
+        if: ${{ success() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.before-save-compute-cache.outputs.save-allowed == 'true' && steps.save-compute-cache.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/github-script@v8
+        env:
+          COMPUTE_CACHE_PHASE: after-save
+          COMPUTE_CACHE_ENABLED: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (vars.COMPUTE_CACHE_ENABLED || 'false') || 'false' }}
+          COMPUTE_CACHE_KEY: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.COMPUTE_CACHE_KEY || '' }}
+          COMPUTE_CACHE_MODEL_REVISION: ${{ vars.COMPUTE_CACHE_MODEL_REVISION || '' }}
+          COMPUTE_CACHE_BUDGET_BYTES: ${{ vars.COMPUTE_CACHE_BUDGET_BYTES || '8000000000' }}
+        with:
+          retries: 0
+          script: |
+            const computeCache = require("./.github/scripts/compute-cache.cjs");
+            await computeCache({ github, context, core, env: process.env });
