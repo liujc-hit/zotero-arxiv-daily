@@ -68,7 +68,8 @@
    | IEEE_XPLORE_API | No | IEEE Xplore API key. Only needed when IEEE abstract enrichment is enabled. | your-ieee-key |
    | ELSEVIER_API | No | Elsevier API key. Only needed when Elsevier abstract enrichment is enabled. | your-elsevier-key |
    | SPRINGER_API | No | Springer Nature metadata API key. Only needed when Springer abstract enrichment is enabled. | your-springer-key |
-   | SENT_DOI_STATE_KEY | When `SENT_DOI_STATE_ENABLED=true` | Fernet key encrypting the persistent sent-paper delivery state; the DOI-named variable is a retained legacy name (see GitHub Actions Deployment). Generate one with `uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and store only the printed key. | your-fernet-key |
+    | SENT_DOI_STATE_KEY | When `SENT_DOI_STATE_ENABLED=true` | Fernet key encrypting the persistent sent-paper delivery state; the DOI-named variable is a retained legacy name (see GitHub Actions Deployment). Generate one with `uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and store only the printed key. | your-fernet-key |
+    | COMPUTE_CACHE_KEY | When `COMPUTE_CACHE_ENABLED=true` | Separate 44-character URL-safe base64 Fernet key for encrypted vectors and scores. Generate locally when you choose to activate; never reuse `SENT_DOI_STATE_KEY`. | separate-fernet-key |
 
 3. Add the repository **Variables** (same settings page, Variables tab). Variables are plain non-secret values, readable in the UI, which is why the config you paste below must only *reference* Secrets via `${oc.env:...}`, never contain them.
    ![vars](./assets/repo_var.png)
@@ -90,7 +91,10 @@
    | OPENALEX_ALLOW_ANONYMOUS | No | Only an explicit `true` lets OpenAlex fall back to keyless anonymous requests when no configured key is usable. Anything else (including unset) means no anonymous access; a requested `openalex` source with no key is then replaced by `crossref` at startup. | true |
     | SENT_DOI_STATE_ENABLED | No | Enables persistent cross-run deduplication: papers whose identity (valid DOI or DOI-resolver URL, else canonical arXiv ID, else normalized stable URL) was already emailed are skipped in later runs. The DOI-named variable is a retained legacy name. Requires the `SENT_DOI_STATE_KEY` Secret. Unset (and anything but `true`) resolves to `false`. | true |
     | EMAIL_BILINGUAL_ENABLED | No | With the overlay below, enables English/Chinese title and TL;DR presentation. The email never shows abstracts. Defaults to `true`; set `false` for legacy single-language digests. | false |
-    | EMAIL_FIGURES_ENABLED | No | With the overlay below, enables best-effort first research figures. Defaults to `true`, independently of bilingual presentation. | false |
+     | EMAIL_FIGURES_ENABLED | No | With the overlay below, enables best-effort first research figures. Defaults to `true`, independently of bilingual presentation. | false |
+     | COMPUTE_CACHE_ENABLED | No | Opt-in encrypted compute snapshots, default `false`; trusted default-branch scheduled/manual runs only. | true |
+     | COMPUTE_CACHE_MODEL_REVISION | When compute cache is enabled | Owner-provided immutable model revision or version epoch. Bump for upstream model changes; no automatic probing. | owner-model-epoch-1 |
+     | COMPUTE_CACHE_BUDGET_BYTES | No | Decimal-byte budget, default and maximum `8000000000` (8 GB, not 8 GiB). Can be reduced. | 8000000000 |
 
 4. Paste this full-capability configuration into the value of `CUSTOM_CONFIG`. Every optional feature is present and wired to a repository Variable or Secret, so toggling a feature never means editing YAML:
    ![custom_config](./assets/config_var.png)
@@ -211,6 +215,15 @@
       enabled: ${oc.decode:${oc.env:SENT_DOI_STATE_ENABLED,'false'}}
       path: .state/sent-dois.fernet  # Encrypted delivery state of sent-paper identities, replaced atomically after each successful send.
       key: ${oc.env:SENT_DOI_STATE_KEY,null} # Fernet key; required when enabled.
+
+    compute_cache:  # Optional encrypted vectors/scores; workflows override the five deployment controls.
+      enabled: ${oc.decode:${oc.env:COMPUTE_CACHE_ENABLED,'false'}}
+      key: ${oc.env:COMPUTE_CACHE_KEY,null}
+      path: .cache/zad-compute
+      budget_bytes: ${oc.decode:${oc.env:COMPUTE_CACHE_BUDGET_BYTES,'8000000000'}}
+      shard_bytes: 16777216
+      ttl_days: 7
+      model_revision: ${oc.env:COMPUTE_CACHE_MODEL_REVISION,null}
      ```
 
    With this overlay pasted, configure the source set and optional feature switches with these Variables:
@@ -409,10 +422,91 @@ When `SENT_DOI_STATE_ENABLED=true`, the sent state is persisted inside your repo
 - First creation is atomic: the persist step creates the blob, a tree, and a parentless root commit, then creates the branch ref as the final call. Any failure along the way leaves no branch behind, and the next successful run creates it again. If the branch is absent and the run sends no identifiable paper, no local ciphertext is produced and persistence intentionally does nothing, leaving the branch absent.
 - Updates are SHA-guarded: the load step records the state file's blob SHA and the update PUT supplies it. If the file changed in between, the update fails rather than silently overwriting.
 - Loading fails closed when the branch exists but something is wrong: the state file is missing, its content is not valid base64/ciphertext, or it cannot be decrypted with the configured key (the wrong-key case after rotation). The run stops instead of starting from an empty state and re-sending everything. Enabling persistence without a key, or with a value other than `true`/`false`, also fails immediately.
-- Both this workflow and the Test workflow declare the same concurrency group (`sent-doi-state-v1`, `cancel-in-progress: false`), so two runs never read or write the state at the same time; a run that arrives mid-flight waits its turn instead of being canceled. Both jobs request only the job-scoped `contents: write` permission those API calls need, disable checkout credential persistence, and execute the application with `uv run --locked`.
+- Both this workflow and the Test workflow declare the same concurrency group (`sent-doi-state-v1`, `cancel-in-progress: false`), so two runs never read or write the state at the same time; a run that arrives mid-flight waits its turn instead of being canceled. Both jobs request job-scoped `contents: write` for state persistence and `actions: write` for trusted compute-cache garbage collection, disable checkout credential persistence, and execute the application with `uv run --locked`.
 - The **Test** workflow shares and updates the same state. It runs the full pipeline and really sends papers, so whatever it emails is marked sent and suppressed from later emails too.
 
 Recovery and key rotation: with persistence disabled (`SENT_DOI_STATE_ENABLED=false`), nothing is deduplicated and already-delivered papers can come back. If `SENT_DOI_STATE_KEY` is lost or replaced, the existing ciphertext can no longer be decrypted, and every run fails closed until you intentionally reset the state: delete the `sent-doi-state-v1` branch, then set the new key and re-enable. After a reset, previously sent papers may appear once more. Rolling back application code has one caveat: a v1 state keeps loading, but once any v2 save has happened (including the lazy rewrite on the next successful send) older versions of this project fail closed on the state until they are upgraded or the state is reset, never erasing it (see the Sent-DOI deduplication section).
+
+### Optional encrypted compute cache (8 GB budget)
+
+This cache is disposable acceleration for embedding **vectors** and reranking
+**scores**, not delivery state. It defaults off. To activate it later, generate a
+new Fernet key locally (using the command above), save the 44-character value as
+the **separate Secret** `COMPUTE_CACHE_KEY`, and set repository **Variables**
+`COMPUTE_CACHE_ENABLED=true` and `COMPUTE_CACHE_MODEL_REVISION` to your model's
+immutable revision or an owner-managed version epoch. Optionally lower
+`COMPUTE_CACHE_BUDGET_BYTES` from `8000000000`; the helper rejects values over
+8,000,000,000 decimal bytes. Never paste a key into a Variable, cache key, or YAML.
+No credential creation, workflow dispatch, cache upload or deletion is needed to
+run the offline tests for this feature.
+
+- **Trusted lifecycle:** only `schedule`/`workflow_dispatch` runs on the current
+  repository's default branch receive the cache key. Other refs/events disable
+  caching and receive an empty key. After checkout, a dependency-free helper
+  prepares the namespace and public-metadata/disk preflight, then
+  `actions/cache/restore@v4` restores ciphertext before Python starts. The existing
+  Setup uv configuration is unchanged. After the app flushes encrypted shards,
+  sent-state persistence runs first; only then does `before-save` check readiness,
+  changes and budget before `actions/cache/save@v4`. `after-save` performs budget
+  accounting/cleanup. All cache steps are fail-soft: missing/invalid keys,
+  missing revision, unsafe bounds or cache-service failures warn and use cold
+  computation or skip saving, without changing SMTP/state failure semantics.
+  A failed preparation also disables caching in the Python command.
+- **Private payloads:** only `.cache/zad-compute/*.enc` is restored/saved, using
+  exactly the same path string for both actions. Vector/score data and the
+  manifest are encrypted; there are no cached plaintext vectors, corpus text,
+  source values, credentials, `.env` files or sent-state files. Public filenames
+  and keys do not contain DOIs or model names. The public namespace begins
+  `zad-compute-v1-` and uses OS/key-HMAC identity rather than raw private inputs.
+  The aggregate status file `.cache/zad-compute-status.json` stays outside the
+  uploaded path; it and the ciphertext directory are specifically git-ignored.
+  Logs expose aggregate hit/miss counts, not the private corpus or raw key.
+  GitHub cache is **not a secret store**: public-repository caches can be readable
+  from pull requests, so application-level encryption and a key kept outside
+  the cache are essential. These workflows do not expose the cache secret to
+  fork/PR runs. Encryption does not conceal archive sizes or access timing.
+- **Budget and retention:** the 8 GB remote budget counts **all retained owned
+  immutable snapshot versions**, not just the newest directory. The helper uses
+  projected reservation before upload, prunes only owned-prefix/default-branch
+  snapshots oldest by last access, and warns at 90% usage. Unrelated caches are
+  untouched; if the repository's shared 10 GB cache allowance lacks headroom,
+  a new save is skipped. This is best-effort accounting around service metadata,
+  **not an instantaneous service-side hard cap**. The separate local physical
+  ciphertext budget limits runner disk usage; a local copy is not counted twice
+  as remote storage. GitHub's seven-day **unaccessed** cache retention differs
+  from the application's seven-day **creation-age** TTL. LRU eviction removes
+  only disposable compute entries, never sent-paper delivery state.
+  Reads tolerate up to five minutes of wall-clock skew (future age clamps to zero), but never slide the TTL: expiration remains stored creation time plus seven days, with no expiry grace.
+- **Immutable whole snapshots:** every changed save uploads the whole current
+  encrypted directory snapshot (the prototype may be only a few MB). Sharding
+  does not make GitHub uploads differential; unchanged shards in older archives
+  still consume remote space. No save occurs without a ready, changed flush
+  status. Unchanged text can reuse per-text vectors, but score-cache validity is
+  conservative over the full scoring universe: corpus contents/order, dates,
+  time-dependent weights, parameters and model identity. Corpus changes can
+  invalidate scores while vectors remain reusable. You must bump the explicit
+  revision namespace whenever upstream model weights change; nothing probes or
+  infers that change automatically.
+
+An existing full `CUSTOM_CONFIG` overlay does not need to be replaced: missing
+cache fields merge from disabled base defaults. Workflows override only enabled,
+key, model revision, fixed path and integer budget; user `shard_bytes`/`ttl_days`
+remain subject to `CacheSettings` bounds. For local use, explicitly opt in in your
+private overlay, with your own model revision and an environment-only key:
+
+```yaml
+compute_cache:
+  enabled: true
+  key: ${oc.env:COMPUTE_CACHE_KEY}
+  model_revision: owner-model-epoch-1
+  path: .cache/zad-compute
+  budget_bytes: 8000000000
+```
+
+Cache misses, expiry or key rotation require recomputation, not resetting sent
+state. Caching does not change LLM/provider/pinning configuration and does not
+guarantee that a four-hour run disappears: Zotero/source retrieval, full-text
+fetching, figures, LLM work and SMTP still involve the network.
 
 ## 💻 Local Usage
 
