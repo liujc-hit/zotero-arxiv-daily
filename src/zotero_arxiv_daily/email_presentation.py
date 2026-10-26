@@ -103,13 +103,33 @@ def figure_html_for(presentation: PaperPresentation | None, cid: str | None) -> 
     return _figure_html(cid, presentation.first_figure)
 
 
+def _title_row_value(value: str | None, original: str) -> str | None:
+    """Row payload for one title language, or None when the row must be dropped.
+
+    A blank translation falls back to the shared notice without echoing the
+    original; a translation identical to the original title drops the row so
+    the heading is never repeated beneath itself. Equality compares
+    outer-trimmed values and stays case-sensitive.
+    """
+    present = _present(value)
+    if present is None:
+        return TRANSLATION_NOTICE
+    if present.strip() == original.strip():
+        return None
+    return present
+
+
+def _bilingual_row(label: str, payload: str | None) -> str:
+    """One labeled title row; a dropped payload emits nothing at all."""
+    if payload is None:
+        return ""
+    return f'<div style="{_BILINGUAL_ROW_STYLE}"><strong>{label}:</strong> {esc(payload)}</div>'
+
+
 def _bilingual_rows(text: BilingualText, original: str) -> str:
-    """Labeled EN/中文 rows; a missing language shows the bilingual notice plus the original text."""
-    en_html = esc(text.en) if text.en is not None else f"{TRANSLATION_NOTICE} {esc(original)}"
-    zh_html = esc(text.zh) if text.zh is not None else f"{TRANSLATION_NOTICE} {esc(original)}"
-    return (
-        f'<div style="{_BILINGUAL_ROW_STYLE}"><strong>EN:</strong> {en_html}</div>'
-        f'<div style="{_BILINGUAL_ROW_STYLE}"><strong>中文:</strong> {zh_html}</div>'
+    """Labeled EN/中文 rows under the heading; duplicates and missing translations never echo it."""
+    return _bilingual_row("EN", _title_row_value(text.en, original)) + _bilingual_row(
+        "中文", _title_row_value(text.zh, original)
     )
 
 
@@ -224,9 +244,11 @@ def render_presentation_block(
 
 
 def _plain_bilingual(text: BilingualText, original: str) -> str:
-    en = text.en if text.en is not None else f"{TRANSLATION_NOTICE} {original}"
-    zh = text.zh if text.zh is not None else f"{TRANSLATION_NOTICE} {original}"
-    return f"EN: {en}\n中文: {zh}"
+    """Plain-text mirror of the title rows; same drop/notice contract as the HTML block."""
+    en = _title_row_value(text.en, original)
+    zh = _title_row_value(text.zh, original)
+    rows = [f"EN: {en}" if en is not None else "", f"中文: {zh}" if zh is not None else ""]
+    return "\n".join(row for row in rows if row)
 
 
 def _plain_tldr(text: BilingualText) -> str:

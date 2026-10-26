@@ -94,12 +94,21 @@ def test_plain_text_digest_lists_papers():
 # ---------------------------------------------------------------------------
 
 
-def test_presentation_shows_original_title_then_labeled_en_and_zh():
-    html = render_email_bundle([make_presented_paper()]).html
+def test_presentation_shows_original_title_then_distinct_translations():
+    """Heading renders once; only translations distinct from it get rows.
+
+    Obsolete expectation removed: this fixture's EN value equaled the heading
+    (the reported duplicate-title bug), so a distinct EN title is supplied
+    here; dropping rows equal to the heading is pinned in
+    test_title_deduplication.py.
+    """
+    presentation = PaperPresentation(title=BilingualText(en="Distinct English Title", zh="示例论文标题"))
+    html = render_email_bundle([make_sample_paper(presentation=presentation)]).html
     heading_pos = html.index("Sample Paper Title")
-    assert "示例论文标题" in html
+    assert html.count("Sample Paper Title") == 1
     en_label = html.index("EN:", heading_pos)
     zh_label = html.index("中文:", en_label)
+    assert "Distinct English Title" in html[en_label:zh_label]
     assert html.index("示例论文标题", zh_label) > zh_label
 
 
@@ -162,13 +171,16 @@ def test_mixed_legacy_and_presentation_papers_render_together():
 # ---------------------------------------------------------------------------
 
 
-def test_missing_zh_title_shows_bilingual_notice_with_original_text():
+def test_missing_zh_title_shows_notice_and_keeps_distinct_en_title():
+    """Obsolete echo expectation removed: the notice no longer appends the
+    original title, so the heading itself must render exactly once."""
     presentation = PaperPresentation(title=BilingualText(en="Fallback original text", zh=None))
     paper = make_sample_paper(presentation=presentation)
     html = render_email_bundle([paper]).html
     for marker in _TRANSLATION_NOTICE_MARKERS:
         assert marker in html
     assert "Fallback original text" in html
+    assert html.count("Sample Paper Title") == 1
 
 
 def test_missing_zh_tldr_shows_notice_once_without_original_echo():
@@ -182,13 +194,16 @@ def test_missing_zh_tldr_shows_notice_once_without_original_echo():
 
 
 def test_missing_zh_title_is_not_presented_as_chinese():
+    """The EN row equal to the heading is dropped; the 中文 row shows only
+    the notice — the original title is never echoed after the heading."""
     presentation = PaperPresentation(title=BilingualText(en="English Only Title", zh=None))
     paper = make_sample_paper(title="English Only Title", presentation=presentation)
     html = render_email_bundle([paper]).html
-    zh_row = html[html.index("中文"):]
-    assert "English Only Title" in zh_row[:400]
+    assert html.count("English Only Title") == 1
+    zh_row = html[html.index("中文:", html.index("English Only Title")):]
     for marker in _TRANSLATION_NOTICE_MARKERS:
         assert marker in zh_row[:400]
+    assert "English Only Title" not in zh_row
 
 
 def test_missing_en_tldr_shows_zh_once_plus_notice():
