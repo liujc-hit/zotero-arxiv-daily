@@ -308,3 +308,38 @@ def test_real_bundle_when_bilingual_generation_succeeds(pipeline, monkeypatch: p
     # Then one request per selected paper reaches rich delivery before state persistence.
     assert len(calls) == 2
     assert events == ["send", "save"] and len(saved) == 1
+
+
+def test_real_bundle_when_bilingual_schema_fails_omits_en_title_row(pipeline, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real schema-failure flow: empty presentation renders heading + 中文 notice, no EN title row."""
+    from zotero_arxiv_daily import executor as execution
+
+    # Given the real bilingual generator fed a schema-invalid payload by a fake client.
+    instance, _, events, saved = pipeline
+    instance.config.llm.api_mode = "chat_completion"
+    instance.config.llm.thinking = None
+    client, calls = make_recording_client("{}")
+    instance.openai_client = client
+
+    def fail_figure(p: Paper) -> ResearchFigure:
+        raise RuntimeError("no figure")
+
+    monkeypatch.setattr(enrichment, "fetch_first_figure", fail_figure)
+
+    def send(config, html: str, *, inline_images=(), plain_text="") -> None:
+        assert html.replace("https://example.org/Top", "").count("Top") == 1  # heading once, never echoed
+        assert "<strong>EN:</strong>" not in html
+        assert "中文:</strong> (translation unavailable / 翻译暂缺)" in html
+        assert "EN: " not in plain_text
+        assert "中文: (translation unavailable / 翻译暂缺)" in plain_text
+        assert "TLDR unavailable / 总结暂缺" in html
+        assert "Original abstract" not in html and "Original abstract" not in plain_text
+        events.append("send")
+
+    monkeypatch.setattr(execution, "send_email", send)
+    # When running through final selection to the actual email bundle.
+    instance.run()
+    # Then the request reached the fake LLM and delivery still completed with state persistence.
+    assert len(calls) == 2
+    assert events == ["send", "save"]
+    assert saved == [{"url:https://example.org/Pinned", "url:https://example.org/Top"}]
