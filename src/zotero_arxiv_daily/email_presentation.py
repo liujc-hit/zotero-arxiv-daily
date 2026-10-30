@@ -103,17 +103,20 @@ def figure_html_for(presentation: PaperPresentation | None, cid: str | None) -> 
     return _figure_html(cid, presentation.first_figure)
 
 
-def _title_row_value(value: str | None, original: str) -> str | None:
+def _title_row_value(
+    value: str | None, original: str, *, missing: str | None = TRANSLATION_NOTICE
+) -> str | None:
     """Row payload for one title language, or None when the row must be dropped.
 
-    A blank translation falls back to the shared notice without echoing the
-    original; a translation identical to the original title drops the row so
-    the heading is never repeated beneath itself. Equality compares
-    outer-trimmed values and stays case-sensitive.
+    A blank row falls back to ``missing`` — the shared notice for the 中文
+    row, an omitted row for EN — without echoing the original; a translation
+    identical to the original title drops the row so the heading is never
+    repeated beneath itself. Equality compares outer-trimmed values and stays
+    case-sensitive.
     """
     present = _present(value)
     if present is None:
-        return TRANSLATION_NOTICE
+        return missing
     if present.strip() == original.strip():
         return None
     return present
@@ -127,8 +130,8 @@ def _bilingual_row(label: str, payload: str | None) -> str:
 
 
 def _bilingual_rows(text: BilingualText, original: str) -> str:
-    """Labeled EN/中文 rows under the heading; duplicates and missing translations never echo it."""
-    return _bilingual_row("EN", _title_row_value(text.en, original)) + _bilingual_row(
+    """Labeled EN/中文 rows under the heading; duplicates and missing EN rows never echo it."""
+    return _bilingual_row("EN", _title_row_value(text.en, original, missing=None)) + _bilingual_row(
         "中文", _title_row_value(text.zh, original)
     )
 
@@ -245,7 +248,7 @@ def render_presentation_block(
 
 def _plain_bilingual(text: BilingualText, original: str) -> str:
     """Plain-text mirror of the title rows; same drop/notice contract as the HTML block."""
-    en = _title_row_value(text.en, original)
+    en = _title_row_value(text.en, original, missing=None)
     zh = _title_row_value(text.zh, original)
     rows = [f"EN: {en}" if en is not None else "", f"中文: {zh}" if zh is not None else ""]
     return "\n".join(row for row in rows if row)

@@ -3,8 +3,9 @@
 Pins the digest fix for the reported bug where an English paper's EN
 "translation" came back equal to the original title and was repeated in small
 text beneath the bold heading, and where a missing translation echoed the
-original title after the translation notice. The HTML block and the
-plain-text mirror must obey the same contract.
+original title after the translation notice. A later user-approved refinement
+omits an absent/blank EN title row entirely (no EN notice); the 中文 row keeps
+its notice. The HTML block and the plain-text mirror obey the same contract.
 """
 
 import pytest
@@ -100,16 +101,27 @@ def test_distinct_title_translation_is_html_escaped():
 
 
 # ---------------------------------------------------------------------------
-# missing or blank translations: notice only, never the original echo
+# missing or blank EN title rows: omitted entirely; 中文 keeps its notice
 # ---------------------------------------------------------------------------
 
 
-def test_missing_en_title_shows_notice_only_without_echo():
+def test_missing_en_title_omits_row_and_keeps_chinese_row():
     bundle = render_email_bundle([make_titled_paper(en=None, zh="示例论文标题")])
     assert bundle.html.count("Sample Paper Title") == 1
-    assert f"<strong>EN:</strong> {TRANSLATION_NOTICE}" in bundle.html
-    assert f"EN: {TRANSLATION_NOTICE}" in bundle.plain_text
+    assert "<strong>EN:</strong>" not in bundle.html
+    assert "<strong>中文:</strong> 示例论文标题" in bundle.html
+    assert "EN: " not in bundle.plain_text
+    assert "中文: 示例论文标题" in bundle.plain_text
     assert bundle.plain_text.count("Sample Paper Title") == 1
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
+def test_blank_en_title_omits_row_and_keeps_chinese_row(blank: str):
+    bundle = render_email_bundle([make_titled_paper(en=blank, zh="示例论文标题")])
+    assert bundle.html.count("Sample Paper Title") == 1
+    assert "<strong>EN:</strong>" not in bundle.html
+    assert "<strong>中文:</strong> 示例论文标题" in bundle.html
+    assert "EN: " not in bundle.plain_text
 
 
 def test_missing_zh_title_shows_notice_only_without_echo():
@@ -119,20 +131,41 @@ def test_missing_zh_title_shows_notice_only_without_echo():
     assert f"中文: {TRANSLATION_NOTICE}" in bundle.plain_text
 
 
-def test_both_translations_missing_show_notice_rows_without_echo():
+def test_both_titles_missing_render_heading_with_zh_notice_alone():
+    """Pinned user report: English paper whose generation left both titles empty."""
     bundle = render_email_bundle([make_titled_paper(en=None, zh=None)])
+    heading = bundle.html.index("Sample Paper Title")
     assert bundle.html.count("Sample Paper Title") == 1
-    assert f"<strong>EN:</strong> {TRANSLATION_NOTICE}" in bundle.html
-    assert f"<strong>中文:</strong> {TRANSLATION_NOTICE}" in bundle.html
+    assert "<strong>EN:</strong>" not in bundle.html
+    zh_row = bundle.html.index(f"<strong>中文:</strong> {TRANSLATION_NOTICE}")
+    assert heading < zh_row
+    assert "中文: (translation unavailable / 翻译暂缺)" in bundle.plain_text
     assert bundle.plain_text.count("Sample Paper Title") == 1
 
 
-@pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
-def test_blank_translations_are_treated_as_missing(blank: str):
-    bundle = render_email_bundle([make_titled_paper(en=blank, zh=blank)])
-    assert bundle.html.count("Sample Paper Title") == 1
-    assert f"<strong>EN:</strong> {TRANSLATION_NOTICE}" in bundle.html
-    assert f"中文: {TRANSLATION_NOTICE}" in bundle.plain_text
+def test_chinese_source_with_distinct_en_title_keeps_en_row():
+    """No source-language heuristic: the EN label keeps rendering distinct text."""
+    bundle = render_email_bundle(
+        [make_titled_paper(title="中文论文标题", en="An English Title", zh=None)]
+    )
+    assert "<strong>EN:</strong> An English Title" in bundle.html
+    assert f"<strong>中文:</strong> {TRANSLATION_NOTICE}" in bundle.html
+    assert "EN: An English Title" in bundle.plain_text
+
+
+def test_tldr_en_unavailable_still_shows_tldr_notice():
+    """Only title rows drop missing EN; TLDR rows keep the unavailable notice."""
+    paper = make_sample_paper(
+        presentation=PaperPresentation(
+            title=BilingualText(en=None, zh="示例论文标题"),
+            tldr=BilingualText(en=None, zh="中文一句话总结"),
+        )
+    )
+    bundle = render_email_bundle([paper])
+    assert "<strong>EN:</strong> (TLDR unavailable / 总结暂缺)" in bundle.html
+    assert "<strong>中文:</strong> 中文一句话总结" in bundle.html
+    assert "EN: (TLDR unavailable / 总结暂缺)" in bundle.plain_text
+    assert "中文: 中文一句话总结" in bundle.plain_text
 
 
 # ---------------------------------------------------------------------------
